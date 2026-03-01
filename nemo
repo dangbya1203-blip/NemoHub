@@ -1,241 +1,223 @@
 --[[
-================================================================================
-  NEMO HUB v3.0  —  "BoneHub Techniques + NemoHub Architecture"
-  ─────────────────────────────────────────────────────────────
-  Kỹ thuật tích hợp từ BoneHub:
-    ✅ Anchor-Block _tp()  : teleport qua proxy Part, không bị server ngắt
-    ✅ Centroid Bring       : gom quái về trung tâm cụm, không về HRP player
-    ✅ Animator:Destroy()   : mob đứng hoàn toàn im sau khi bị gom
-    ✅ Attribute Locking     : cache CFrame gốc của mob bằng SetAttribute
-    ✅ World Detection       : PlaceId → load data đúng Sea
-    ✅ FPS Booster (5-layer): Lighting + Terrain + PostFX + Particles + GC×2
-    ✅ Server Hop            : __ServerBrowser → tìm server thưa người
-    ✅ __namecall Hook       : inject MousePos vào mọi skill FireServer
-    ✅ Inventory Helpers     : GetBP / GetM / GetIn / GetWP chuẩn
-    ✅ Useskills via VIM     : dùng VirtualInputManager bấm phím thật
-    ✅ task.wait() toàn bộ  : không còn wait() deprecated
-    ✅ Connection cleanup    : tất cả connection được :Disconnect() khi tắt
-================================================================================
+  NEMO HUB v4.0
+  Architecture: Crash-proof — mọi thứ trong pcall, UI load trước game logic
+  Fluent: Fluent + SaveManager + InterfaceManager đầy đủ
 ]]
 
 --==============================================================================
--- SECTION 1 : SERVICES
+-- GUARD: Chờ game load xong trước khi làm bất cứ điều gì
 --==============================================================================
-local Services = {
-    Players           = game:GetService("Players"),
-    ReplicatedStorage = game:GetService("ReplicatedStorage"),
-    RunService        = game:GetService("RunService"),
-    TweenService      = game:GetService("TweenService"),
-    TeleportService   = game:GetService("TeleportService"),
-    Workspace         = game:GetService("Workspace"),
-    Lighting          = game:GetService("Lighting"),
-    VIM               = game:GetService("VirtualInputManager"),
-    StarterGui        = game:GetService("StarterGui"),
-}
-
-local RS  = Services.ReplicatedStorage
-local WS  = Services.Workspace
-local TW  = Services.TweenService
-local TP  = Services.TeleportService
-local VIM = Services.VIM
+if not game:IsLoaded() then game.Loaded:Wait() end
 
 --==============================================================================
--- SECTION 2 : WORLD DETECTION  (học từ BoneHub)
+-- SECTION 1: SERVICES — getService trong pcall riêng từng cái
 --==============================================================================
-local PlaceId = game.PlaceId
-local World = {
-    Sea1 = PlaceId == 2753915549 or PlaceId == 85211729168715,
-    Sea2 = PlaceId == 4442272183 or PlaceId == 79091703265657,
-    Sea3 = PlaceId == 7449423635,
-}
--- Fallback nếu không match (Private Server hoặc Test Place)
-if not (World.Sea1 or World.Sea2 or World.Sea3) then
-    World.Sea1 = true
+local function gs(name)
+    local ok, s = pcall(function() return game:GetService(name) end)
+    return ok and s or nil
 end
 
---==============================================================================
--- SECTION 3 : CONSTANTS & CONFIG
---==============================================================================
-local CFG = {
-    Team         = (getgenv().Config and getgenv().Config.Team) or "Marines",
-    BringRadius  = 350,
-    BringSpeed   = 300,
-    FlyOffset    = Vector3.new(0, 15, 0),
-    AttackRate   = 0.05,
-    HopMaxPlayers= 12,         -- Hop sang server có < N người
-    WindowSize   = UDim2.fromOffset(600, 480),
-    MinimizeKey  = Enum.KeyCode.RightControl,
-}
+local Players    = gs("Players")
+local RS         = gs("ReplicatedStorage")
+local RunService = gs("RunService")
+local TW         = gs("TweenService")
+local TP_SVC     = gs("TeleportService")
+local WS         = gs("Workspace")
+local Lighting   = gs("Lighting")
+local VIM        = gs("VirtualInputManager")
+
+local Plr        = Players and Players.LocalPlayer
 
 --==============================================================================
--- SECTION 4 : QUEST DATABASE  (theo từng Sea)
+-- SECTION 2: HELPER FUNCTIONS
 --==============================================================================
-local QUEST_DB_SEA1 = {
-    { minLv=1,   maxLv=14,  QuestName="BanditQuest1",  QuestNum=1, MobName="Bandit",            NPCPos=CFrame.new(1059.37,15.44,1550.42) },
-    { minLv=15,  maxLv=19,  QuestName="JungleQuest",   QuestNum=1, MobName="Monkey",            NPCPos=CFrame.new(-1594,36.8,153.3) },
-    { minLv=20,  maxLv=29,  QuestName="JungleQuest",   QuestNum=2, MobName="Gorilla",           NPCPos=CFrame.new(-1594,36.8,153.3) },
-    { minLv=30,  maxLv=39,  QuestName="BuggyQuest1",   QuestNum=1, MobName="Pirate",            NPCPos=CFrame.new(-1141,4.7,3827) },
-    { minLv=40,  maxLv=59,  QuestName="BuggyQuest1",   QuestNum=2, MobName="Brute",             NPCPos=CFrame.new(-1141,4.7,3827) },
-    { minLv=60,  maxLv=74,  QuestName="MarineQuest1",  QuestNum=1, MobName="Marine",            NPCPos=CFrame.new(976,15,1387) },
-    { minLv=75,  maxLv=99,  QuestName="MarineQuest1",  QuestNum=2, MobName="Marine Captain",    NPCPos=CFrame.new(976,15,1387) },
-    { minLv=100, maxLv=124, QuestName="SwordQuest",    QuestNum=1, MobName="Sword Bandit",      NPCPos=CFrame.new(-2570,7,1350) },
-    { minLv=125, maxLv=149, QuestName="SwordQuest",    QuestNum=2, MobName="Dangerous Pirate",  NPCPos=CFrame.new(-2570,7,1350) },
-    { minLv=150, maxLv=174, QuestName="MilitaryQuest", QuestNum=1, MobName="Military Soldier",  NPCPos=CFrame.new(-3166,9,413) },
-    { minLv=175, maxLv=199, QuestName="MilitaryQuest", QuestNum=2, MobName="Military Leader",   NPCPos=CFrame.new(-3166,9,413) },
-    { minLv=200, maxLv=224, QuestName="PrisonQuest",   QuestNum=1, MobName="Prisoner",          NPCPos=CFrame.new(-1493,43,362) },
-    { minLv=225, maxLv=274, QuestName="PrisonQuest",   QuestNum=2, MobName="Dangerous Prisoner",NPCPos=CFrame.new(-1493,43,362) },
-    { minLv=275, maxLv=299, QuestName="ColQuest1",     QuestNum=1, MobName="Musketeer Pirate",  NPCPos=CFrame.new(-1003,8,2385) },
-    { minLv=300, maxLv=374, QuestName="ColQuest1",     QuestNum=2, MobName="Swan Pirate",       NPCPos=CFrame.new(-1003,8,2385) },
-    { minLv=375, maxLv=449, QuestName="GalleonQuest",  QuestNum=1, MobName="Galley Pirate",     NPCPos=CFrame.new(-2399,6,2492) },
-    { minLv=450, maxLv=524, QuestName="GalleonQuest",  QuestNum=2, MobName="Galleon Sailor",    NPCPos=CFrame.new(-2399,6,2492) },
-    { minLv=525, maxLv=624, QuestName="ImpelQuest",    QuestNum=1, MobName="Toga Warrior",      NPCPos=CFrame.new(-10.3,73.8,4283) },
-    { minLv=625, maxLv=699, QuestName="ImpelQuest",    QuestNum=2, MobName="Royal Soldier",     NPCPos=CFrame.new(-10.3,73.8,4283) },
-}
+local function noop(...) end
 
-local QUEST_DB_SEA2 = {
-    { minLv=700, maxLv=774,  QuestName="IslandQuest",  QuestNum=1, MobName="Marine Lieutenant",  NPCPos=CFrame.new(568,15,4550) },
-    { minLv=775, maxLv=849,  QuestName="IslandQuest",  QuestNum=2, MobName="Marine Commander",   NPCPos=CFrame.new(568,15,4550) },
-    { minLv=850, maxLv=924,  QuestName="ShipQuest",    QuestNum=1, MobName="Ship Deckhand",      NPCPos=CFrame.new(-3039,7,3908) },
-    { minLv=925, maxLv=999,  QuestName="ShipQuest",    QuestNum=2, MobName="Ship Engineer",      NPCPos=CFrame.new(-3039,7,3908) },
-    { minLv=1000,maxLv=1099, QuestName="FightClub1",   QuestNum=1, MobName="Dragon Crew Warrior",NPCPos=CFrame.new(7021,55,-730) },
-    { minLv=1100,maxLv=1199, QuestName="FightClub1",   QuestNum=2, MobName="Dragon Crew Archer", NPCPos=CFrame.new(6625,378,244) },
-    { minLv=1200,maxLv=1299, QuestName="IslandQuest2", QuestNum=1, MobName="Female Islander",    NPCPos=CFrame.new(4693,797,858) },
-    { minLv=1300,maxLv=1399, QuestName="IslandQuest2", QuestNum=2, MobName="Bandit",             NPCPos=CFrame.new(4693,797,858) },
-    { minLv=1400,maxLv=1499, QuestName="MarineOutpost", QuestNum=1,MobName="Marine Commodore",   NPCPos=CFrame.new(2401,123,-7589) },
-    { minLv=1500,maxLv=1574, QuestName="MarineOutpost", QuestNum=2,MobName="Marine Rear Admiral",NPCPos=CFrame.new(3588,229,-7085) },
-    { minLv=1575,maxLv=1699, QuestName="FishmanIsland",QuestNum=1, MobName="Fishman Raider",     NPCPos=CFrame.new(-10941,332,-8760) },
-    { minLv=1700,maxLv=1799, QuestName="FishmanIsland",QuestNum=2, MobName="Fishman Captain",    NPCPos=CFrame.new(-11035,332,-9087) },
-}
-
-local QUEST_DB_SEA3 = {
-    { minLv=1800,maxLv=1899, QuestName="FrostWood1",   QuestNum=1, MobName="Forest Pirate",      NPCPos=CFrame.new(-13446,413,-7760) },
-    { minLv=1900,maxLv=1999, QuestName="FrostWood1",   QuestNum=2, MobName="Mythological Pirate", NPCPos=CFrame.new(-13510,584,-6987) },
-    { minLv=2000,maxLv=2099, QuestName="JunglePirate1",QuestNum=1, MobName="Jungle Pirate",      NPCPos=CFrame.new(-11778,426,-10592) },
-    { minLv=2100,maxLv=2199, QuestName="JunglePirate1",QuestNum=2, MobName="Musketeer Pirate",   NPCPos=CFrame.new(-13282,496,-9565) },
-    { minLv=2200,maxLv=2299, QuestName="HauntedCastle",QuestNum=1, MobName="Living Zombie",      NPCPos=CFrame.new(-10227,421,6161) },
-    { minLv=2300,maxLv=2399, QuestName="HauntedCastle",QuestNum=2, MobName="Demonic Soul",       NPCPos=CFrame.new(-9579,6,6194) },
-    { minLv=2400,maxLv=2499, QuestName="PeanutCity1",  QuestNum=1, MobName="Peanut Scout",       NPCPos=CFrame.new(-1993,187,-10103) },
-    { minLv=2500,maxLv=2599, QuestName="PeanutCity1",  QuestNum=2, MobName="Peanut President",   NPCPos=CFrame.new(-2215,159,-10474) },
-    { minLv=2600,maxLv=2699, QuestName="CandyKingdom", QuestNum=1, MobName="Ice Cream Chef",     NPCPos=CFrame.new(-877,118,-11032) },
-    { minLv=2700,maxLv=2799, QuestName="CandyKingdom", QuestNum=2, MobName="Ice Cream Commander",NPCPos=CFrame.new(-877,118,-11032) },
-    { minLv=2800,maxLv=2999, QuestName="Hydra1",       QuestNum=1, MobName="Mythological Pirate", NPCPos=CFrame.new(-13510,584,-6987) },
-}
-
--- Chọn DB theo world
-local QUEST_DB = World.Sea1 and QUEST_DB_SEA1
-              or World.Sea2 and QUEST_DB_SEA2
-              or QUEST_DB_SEA3
-
---==============================================================================
--- SECTION 5 : REMOTES  (cache + fallback no-op)
---==============================================================================
-local function noop() end
-local function safeFind(parent, ...)
-    local obj = parent
+-- Tìm nested child an toàn, không crash nếu nil
+local function safeFind(root, ...)
+    local cur = root
     for _, name in ipairs({...}) do
-        if not obj then return nil end
-        obj = obj:FindFirstChild(name)
+        if not cur then return nil end
+        cur = cur:FindFirstChild(name)
     end
-    return obj
+    return cur
 end
 
-local Remotes = {
-    CommF          = safeFind(RS, "Remotes", "CommF_")    or { InvokeServer = noop, FireServer = noop },
-    RegisterAttack = RS:FindFirstChild("RegisterAttack")  or { FireServer = noop },
-    RegisterHit    = RS:FindFirstChild("RegisterHit")     or { FireServer = noop },
-    ServerBrowser  = RS:FindFirstChild("__ServerBrowser") or { InvokeServer = noop },
-}
+-- Gọi hàm an toàn, trả về giá trị hoặc nil
+local function safe(fn, ...)
+    local ok, v = pcall(fn, ...)
+    return ok and v or nil
+end
 
---==============================================================================
--- SECTION 6 : PLAYER CONTEXT
---==============================================================================
-local Plr = Services.Players.LocalPlayer
-
-local function getChar()  return Plr.Character end
+local function getChar()
+    return Plr and Plr.Character
+end
 local function getHRP()
     local c = getChar()
     return c and c:FindFirstChild("HumanoidRootPart")
 end
-local function getHuman()
-    local c = getChar()
-    return c and c:FindFirstChild("Humanoid")
+
+--==============================================================================
+-- SECTION 3: WORLD DETECTION
+--==============================================================================
+local PID = game.PlaceId
+local World = {
+    Sea1 = PID == 2753915549 or PID == 85211729168715,
+    Sea2 = PID == 4442272183 or PID == 79091703265657,
+    Sea3 = PID == 7449423635,
+}
+if not (World.Sea1 or World.Sea2 or World.Sea3) then World.Sea1 = true end
+local seaLabel = World.Sea1 and "Sea 1" or World.Sea2 and "Sea 2" or "Sea 3"
+
+--==============================================================================
+-- SECTION 4: CONFIG
+--==============================================================================
+local CFG = {
+    BringRadius   = 350,
+    BringSpeed    = 300,
+    FlyOffset     = Vector3.new(0, 15, 0),
+    AttackRate    = 0.05,
+    HopMaxPlayers = 12,
+    WindowSize    = UDim2.fromOffset(620, 500),
+    MinimizeKey   = Enum.KeyCode.RightControl,
+}
+
+--==============================================================================
+-- SECTION 5: QUEST DATABASE
+--==============================================================================
+local QUEST_DB_SEA1 = {
+    { minLv=1,   maxLv=14,  QuestName="BanditQuest1",  QuestNum=1, MobName="Bandit",             NPCPos=CFrame.new(1059.37,15.44,1550.42) },
+    { minLv=15,  maxLv=19,  QuestName="JungleQuest",   QuestNum=1, MobName="Monkey",             NPCPos=CFrame.new(-1594,36.8,153.3) },
+    { minLv=20,  maxLv=29,  QuestName="JungleQuest",   QuestNum=2, MobName="Gorilla",            NPCPos=CFrame.new(-1594,36.8,153.3) },
+    { minLv=30,  maxLv=39,  QuestName="BuggyQuest1",   QuestNum=1, MobName="Pirate",             NPCPos=CFrame.new(-1141,4.7,3827) },
+    { minLv=40,  maxLv=59,  QuestName="BuggyQuest1",   QuestNum=2, MobName="Brute",              NPCPos=CFrame.new(-1141,4.7,3827) },
+    { minLv=60,  maxLv=74,  QuestName="MarineQuest1",  QuestNum=1, MobName="Marine",             NPCPos=CFrame.new(976,15,1387) },
+    { minLv=75,  maxLv=99,  QuestName="MarineQuest1",  QuestNum=2, MobName="Marine Captain",     NPCPos=CFrame.new(976,15,1387) },
+    { minLv=100, maxLv=124, QuestName="SwordQuest",    QuestNum=1, MobName="Sword Bandit",       NPCPos=CFrame.new(-2570,7,1350) },
+    { minLv=125, maxLv=149, QuestName="SwordQuest",    QuestNum=2, MobName="Dangerous Pirate",   NPCPos=CFrame.new(-2570,7,1350) },
+    { minLv=150, maxLv=174, QuestName="MilitaryQuest", QuestNum=1, MobName="Military Soldier",   NPCPos=CFrame.new(-3166,9,413) },
+    { minLv=175, maxLv=199, QuestName="MilitaryQuest", QuestNum=2, MobName="Military Leader",    NPCPos=CFrame.new(-3166,9,413) },
+    { minLv=200, maxLv=224, QuestName="PrisonQuest",   QuestNum=1, MobName="Prisoner",           NPCPos=CFrame.new(-1493,43,362) },
+    { minLv=225, maxLv=274, QuestName="PrisonQuest",   QuestNum=2, MobName="Dangerous Prisoner", NPCPos=CFrame.new(-1493,43,362) },
+    { minLv=275, maxLv=299, QuestName="ColQuest1",     QuestNum=1, MobName="Musketeer Pirate",   NPCPos=CFrame.new(-1003,8,2385) },
+    { minLv=300, maxLv=374, QuestName="ColQuest1",     QuestNum=2, MobName="Swan Pirate",        NPCPos=CFrame.new(-1003,8,2385) },
+    { minLv=375, maxLv=449, QuestName="GalleonQuest",  QuestNum=1, MobName="Galley Pirate",      NPCPos=CFrame.new(-2399,6,2492) },
+    { minLv=450, maxLv=524, QuestName="GalleonQuest",  QuestNum=2, MobName="Galleon Sailor",     NPCPos=CFrame.new(-2399,6,2492) },
+    { minLv=525, maxLv=624, QuestName="ImpelQuest",    QuestNum=1, MobName="Toga Warrior",       NPCPos=CFrame.new(-10.3,73.8,4283) },
+    { minLv=625, maxLv=699, QuestName="ImpelQuest",    QuestNum=2, MobName="Royal Soldier",      NPCPos=CFrame.new(-10.3,73.8,4283) },
+}
+local QUEST_DB_SEA2 = {
+    { minLv=700, maxLv=774,  QuestName="IslandQuest",   QuestNum=1, MobName="Marine Lieutenant",   NPCPos=CFrame.new(568,15,4550) },
+    { minLv=775, maxLv=849,  QuestName="IslandQuest",   QuestNum=2, MobName="Marine Commander",    NPCPos=CFrame.new(568,15,4550) },
+    { minLv=850, maxLv=924,  QuestName="ShipQuest",     QuestNum=1, MobName="Ship Deckhand",       NPCPos=CFrame.new(-3039,7,3908) },
+    { minLv=925, maxLv=999,  QuestName="ShipQuest",     QuestNum=2, MobName="Ship Engineer",       NPCPos=CFrame.new(-3039,7,3908) },
+    { minLv=1000,maxLv=1099, QuestName="FightClub1",    QuestNum=1, MobName="Dragon Crew Warrior", NPCPos=CFrame.new(7021,55,-730) },
+    { minLv=1100,maxLv=1199, QuestName="FightClub1",    QuestNum=2, MobName="Dragon Crew Archer",  NPCPos=CFrame.new(6625,378,244) },
+    { minLv=1200,maxLv=1299, QuestName="IslandQuest2",  QuestNum=1, MobName="Female Islander",     NPCPos=CFrame.new(4693,797,858) },
+    { minLv=1300,maxLv=1399, QuestName="IslandQuest2",  QuestNum=2, MobName="Venomous Assailant",  NPCPos=CFrame.new(4902,670,39) },
+    { minLv=1400,maxLv=1499, QuestName="MarineOutpost", QuestNum=1, MobName="Marine Commodore",    NPCPos=CFrame.new(2401,123,-7589) },
+    { minLv=1500,maxLv=1574, QuestName="MarineOutpost", QuestNum=2, MobName="Marine Rear Admiral", NPCPos=CFrame.new(3588,229,-7085) },
+    { minLv=1575,maxLv=1699, QuestName="FishmanIsland", QuestNum=1, MobName="Fishman Raider",      NPCPos=CFrame.new(-10941,332,-8760) },
+    { minLv=1700,maxLv=1799, QuestName="FishmanIsland", QuestNum=2, MobName="Fishman Captain",     NPCPos=CFrame.new(-11035,332,-9087) },
+}
+local QUEST_DB_SEA3 = {
+    { minLv=1800,maxLv=1899, QuestName="FrostWood1",    QuestNum=1, MobName="Forest Pirate",        NPCPos=CFrame.new(-13446,413,-7760) },
+    { minLv=1900,maxLv=1999, QuestName="FrostWood1",    QuestNum=2, MobName="Mythological Pirate",  NPCPos=CFrame.new(-13510,584,-6987) },
+    { minLv=2000,maxLv=2099, QuestName="JunglePirate1", QuestNum=1, MobName="Jungle Pirate",        NPCPos=CFrame.new(-11778,426,-10592) },
+    { minLv=2100,maxLv=2199, QuestName="JunglePirate1", QuestNum=2, MobName="Musketeer Pirate",     NPCPos=CFrame.new(-13282,496,-9565) },
+    { minLv=2200,maxLv=2299, QuestName="HauntedCastle", QuestNum=1, MobName="Living Zombie",        NPCPos=CFrame.new(-10227,421,6161) },
+    { minLv=2300,maxLv=2399, QuestName="HauntedCastle", QuestNum=2, MobName="Demonic Soul",         NPCPos=CFrame.new(-9579,6,6194) },
+    { minLv=2400,maxLv=2499, QuestName="PeanutCity1",   QuestNum=1, MobName="Peanut Scout",         NPCPos=CFrame.new(-1993,187,-10103) },
+    { minLv=2500,maxLv=2599, QuestName="PeanutCity1",   QuestNum=2, MobName="Peanut President",     NPCPos=CFrame.new(-2215,159,-10474) },
+    { minLv=2600,maxLv=2699, QuestName="CandyKingdom",  QuestNum=1, MobName="Ice Cream Chef",       NPCPos=CFrame.new(-877,118,-11032) },
+    { minLv=2700,maxLv=2799, QuestName="CandyKingdom",  QuestNum=2, MobName="Ice Cream Commander",  NPCPos=CFrame.new(-877,118,-11032) },
+    { minLv=2800,maxLv=2999, QuestName="Hydra1",        QuestNum=1, MobName="Mythological Pirate",  NPCPos=CFrame.new(-13510,584,-6987) },
+}
+local QUEST_DB = World.Sea1 and QUEST_DB_SEA1 or World.Sea2 and QUEST_DB_SEA2 or QUEST_DB_SEA3
+
+--==============================================================================
+-- SECTION 6: REMOTES — lazy init, luôn trả về callable object
+--==============================================================================
+local _noopObj  = { FireServer = noop, InvokeServer = noop }
+local function getRemote(...)
+    return safeFind(RS, ...) or _noopObj
 end
 
+-- Cache lần đầu dùng, không crash nếu RS chưa ready
+local Remote = setmetatable({}, {
+    __index = function(t, k)
+        local map = {
+            CommF         = function() return safeFind(RS,"Remotes","CommF_") or _noopObj end,
+            RegisterAttack= function() return RS:FindFirstChild("RegisterAttack") or _noopObj end,
+            RegisterHit   = function() return RS:FindFirstChild("RegisterHit") or _noopObj end,
+            ServerBrowser = function() return RS:FindFirstChild("__ServerBrowser") or _noopObj end,
+        }
+        local v = map[k] and map[k]() or _noopObj
+        rawset(t, k, v)
+        return v
+    end
+})
+
 --==============================================================================
--- SECTION 7 : ANCHOR-BLOCK TELEPORT MODULE  (học từ BoneHub _tp)
---   Thay vì tween HumanoidRootPart trực tiếp (dễ bị server reset),
---   ta tween một invisible "anchor" Part, rồi character bám theo.
---   Lợi ích: movement qua physics proxy → ít bị anti-cheat detect hơn.
+-- SECTION 7: ANCHOR-BLOCK TELEPORT  (BoneHub _tp technique)
 --==============================================================================
-local TpModule = {}
+local TpModule   = { _active = false, _tween = nil }
+local _anchor    = nil
 
--- Tạo anchor block 1 lần duy nhất
-local _anchor = Instance.new("Part")
-_anchor.Name        = "NemoAnchor"
-_anchor.Size        = Vector3.new(1,1,1)
-_anchor.Anchored    = true
-_anchor.CanCollide  = false
-_anchor.CanTouch    = false
-_anchor.Transparency= 1
-_anchor.Parent      = WS
+-- Tạo anchor block an toàn
+pcall(function()
+    _anchor            = Instance.new("Part")
+    _anchor.Name       = "NemoAnchor"
+    _anchor.Size       = Vector3.new(1,1,1)
+    _anchor.Anchored   = true
+    _anchor.CanCollide = false
+    _anchor.CanTouch   = false
+    _anchor.Transparency = 1
+    _anchor.Parent     = WS
+end)
 
-TpModule._active   = false  -- true khi đang farm
-TpModule._tween    = nil
-
--- Tween anchor đến đích, character follow qua loop bên dưới
 function TpModule.Go(targetCF, speed)
-    if not targetCF then return end
+    if not _anchor or not targetCF then return end
     speed = speed or CFG.BringSpeed
-    local dist = (targetCF.Position - _anchor.Position).Magnitude
-    if dist < 1 then return end
-
-    if TpModule._tween then TpModule._tween:Cancel() end
-
-    local info  = TweenInfo.new(dist / speed, Enum.EasingStyle.Linear)
-    local tween = TW:Create(_anchor, info, { CFrame = targetCF })
-    TpModule._tween = tween
-    tween:Play()
-
-    -- Tự hủy khi farm bị tắt giữa chừng
-    task.spawn(function()
-        while tween.PlaybackState == Enum.PlaybackState.Playing do
-            if not TpModule._active then tween:Cancel() break end
-            task.wait(0.05)
-        end
+    pcall(function()
+        local dist = (targetCF.Position - _anchor.Position).Magnitude
+        if dist < 1 then return end
+        if TpModule._tween then TpModule._tween:Cancel() end
+        local tw = TW:Create(_anchor, TweenInfo.new(dist/speed, Enum.EasingStyle.Linear), { CFrame = targetCF })
+        TpModule._tween = tw
+        tw:Play()
+        task.spawn(function()
+            while tw.PlaybackState == Enum.PlaybackState.Playing do
+                if not TpModule._active then tw:Cancel() return end
+                task.wait(0.05)
+            end
+        end)
     end)
-end
-
--- Teleport tức thời (không tween) — dùng cho trường hợp đặc biệt
-function TpModule.Warp(targetCF)
-    local hrp = getHRP()
-    if hrp then hrp.CFrame = targetCF end
-    _anchor.CFrame = targetCF
 end
 
 function TpModule.SetActive(state)
     TpModule._active = state
-    -- Khi tắt: restore CanCollide của character
-    local char = getChar()
-    if char then
-        for _, part in ipairs(char:GetChildren()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = not state and true or false
+    pcall(function()
+        local char = getChar()
+        if char then
+            for _, p in ipairs(char:GetChildren()) do
+                if p:IsA("BasePart") then p.CanCollide = not state end
             end
         end
-    end
+    end)
 end
 
--- Loop: character bám anchor khi đang farm
+-- Character follow anchor
 task.spawn(function()
     while task.wait() do
         pcall(function()
-            if TpModule._active then
+            if TpModule._active and _anchor then
                 local hrp = getHRP()
                 if hrp then
                     if (hrp.Position - _anchor.Position).Magnitude > 200 then
-                        _anchor.CFrame = hrp.CFrame  -- reset nếu quá xa
+                        _anchor.CFrame = hrp.CFrame
                     else
-                        hrp.CFrame = _anchor.CFrame  -- character follow anchor
+                        hrp.CFrame = _anchor.CFrame
                     end
                 end
             end
@@ -244,199 +226,174 @@ task.spawn(function()
 end)
 
 --==============================================================================
--- SECTION 8 : MOB MODULE  (Centroid Bring + Animator:Destroy — học từ BoneHub)
+-- SECTION 8: MOB MODULE  (Centroid Bring + Animator:Destroy)
 --==============================================================================
 local MobModule = {}
 
--- Tính vị trí trung bình (centroid) của tất cả mob cùng tên
-local function getMobCentroid(mobName)
-    local sum   = Vector3.zero
-    local count = 0
-    for _, v in ipairs(WS.Enemies:GetChildren()) do
-        if v.Name == mobName and v:FindFirstChild("HumanoidRootPart") then
-            sum   = sum + v.HumanoidRootPart.Position
-            count = count + 1
+local function getMobCentroid(name)
+    local sum, n = Vector3.zero, 0
+    pcall(function()
+        for _, v in ipairs(WS.Enemies:GetChildren()) do
+            local hrp = v:FindFirstChild("HumanoidRootPart")
+            if v.Name == name and hrp then
+                sum = sum + hrp.Position
+                n   = n + 1
+            end
         end
-    end
-    return count > 0 and (sum / count) or nil
+    end)
+    return n > 0 and (sum / n) or nil
 end
 
--- Lấy danh sách mob còn sống
-function MobModule.GetAlive(filterName)
+function MobModule.GetAlive(filter)
     local result = {}
-    local container = WS:FindFirstChild("Enemies")
-    if not container then return result end
-    for _, v in ipairs(container:GetChildren()) do
-        local hum = v:FindFirstChild("Humanoid")
-        if hum and hum.Health > 0 then
-            if (not filterName) or v.Name == filterName then
-                table.insert(result, v)
-            end
-        end
-    end
-    return result
-end
-
--- Gom quái về centroid + lock + xóa Animator
-function MobModule.BringAll(filterName)
-    local hrp = getHRP()
-    if not hrp then return end
-
-    -- Tính centroid cho từng loại mob
-    local centroids = {}
-    local enemies   = WS:FindFirstChild("Enemies")
-    if not enemies then return end
-
-    for _, v in ipairs(enemies:GetChildren()) do
-        if (not filterName) or v.Name == filterName then
-            if not centroids[v.Name] then
-                local c = getMobCentroid(v.Name)
-                if c then centroids[v.Name] = c end
-            end
-        end
-    end
-
-    -- Tween từng mob về centroid của loại nó
-    for _, v in ipairs(enemies:GetChildren()) do
-        local hum    = v:FindFirstChild("Humanoid")
-        local mobHRP = v:FindFirstChild("HumanoidRootPart")
-        if hum and mobHRP and hum.Health > 0 then
-            if (not filterName) or v.Name == filterName then
-                local dist = (mobHRP.Position - hrp.Position).Magnitude
-                if dist <= CFG.BringRadius then
-                    local centroid = centroids[v.Name]
-                    if centroid then
-                        local targetCF = CFrame.new(centroid.X, centroid.Y, centroid.Z)
-                        local mobDist  = (mobHRP.Position - centroid).Magnitude
-                        if mobDist > 3 and mobDist <= 280 then
-                            -- Tween về centroid
-                            local info  = TweenInfo.new(mobDist / CFG.BringSpeed, Enum.EasingStyle.Linear)
-                            TW:Create(mobHRP, info, { CFrame = targetCF }):Play()
-                            -- Lock vận động
-                            mobHRP.CanCollide = false
-                            hum.WalkSpeed     = 0
-                            hum.JumpPower     = 0
-                            -- Xóa Animator → mob đứng im hoàn toàn (BoneHub trick)
-                            local anim = hum:FindFirstChild("Animator")
-                            if anim then anim:Destroy() end
-                            -- Tăng simulation radius
-                            pcall(function()
-                                sethiddenproperty(Plr, "SimulationRadius", math.huge)
-                            end)
-                        end
-                    end
+    pcall(function()
+        local container = WS:FindFirstChild("Enemies")
+        if not container then return end
+        for _, v in ipairs(container:GetChildren()) do
+            local hum = v:FindFirstChild("Humanoid")
+            if hum and hum.Health > 0 then
+                if (not filter) or v.Name == filter then
+                    table.insert(result, v)
                 end
             end
         end
-    end
+    end)
+    return result
 end
 
--- Cache vị trí mob bằng Attribute (học từ BoneHub Attack.Kill)
-function MobModule.LockPosition(mob)
-    if not mob:GetAttribute("NemoLocked") then
-        local hrp = mob:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            mob:SetAttribute("NemoLocked", hrp.CFrame)
+function MobModule.BringAll(filter)
+    pcall(function()
+        local hrp = getHRP()
+        if not hrp then return end
+        local enemies = WS:FindFirstChild("Enemies")
+        if not enemies then return end
+
+        -- Tính centroid mỗi loại một lần
+        local centroids = {}
+        for _, v in ipairs(enemies:GetChildren()) do
+            if (not filter) or v.Name == filter then
+                if not centroids[v.Name] then
+                    centroids[v.Name] = getMobCentroid(v.Name)
+                end
+            end
         end
-    end
-    return mob:GetAttribute("NemoLocked")
+
+        -- Tween từng mob về centroid
+        for _, v in ipairs(enemies:GetChildren()) do
+            pcall(function()
+                local hum    = v:FindFirstChild("Humanoid")
+                local mobHRP = v:FindFirstChild("HumanoidRootPart")
+                if not (hum and mobHRP and hum.Health > 0) then return end
+                if filter and v.Name ~= filter then return end
+                if (mobHRP.Position - hrp.Position).Magnitude > CFG.BringRadius then return end
+
+                local c = centroids[v.Name]
+                if not c then return end
+                local cf  = CFrame.new(c.X, c.Y, c.Z)
+                local md  = (mobHRP.Position - c).Magnitude
+                if md > 3 and md <= 280 then
+                    TW:Create(mobHRP, TweenInfo.new(md/CFG.BringSpeed,Enum.EasingStyle.Linear), {CFrame=cf}):Play()
+                    mobHRP.CanCollide = false
+                    hum.WalkSpeed     = 0
+                    hum.JumpPower     = 0
+                    -- BoneHub: xóa Animator → mob đứng im hoàn toàn
+                    local anim = hum:FindFirstChild("Animator")
+                    if anim then pcall(function() anim:Destroy() end) end
+                    pcall(function() sethiddenproperty(Plr,"SimulationRadius",math.huge) end)
+                end
+            end)
+        end
+    end)
 end
 
 --==============================================================================
--- SECTION 9 : COMBAT MODULE
+-- SECTION 9: COMBAT MODULE
 --==============================================================================
 local CombatModule = {}
 
--- Dùng VirtualInputManager bấm phím skill thật (học từ BoneHub Useskills)
 local function pressKey(key)
-    VIM:SendKeyEvent(true,  key, false, game)
-    VIM:SendKeyEvent(false, key, false, game)
+    pcall(function()
+        VIM:SendKeyEvent(true,  key, false, game)
+        VIM:SendKeyEvent(false, key, false, game)
+    end)
 end
 
-function CombatModule.UseSkill(weapon, key)
-    local char = getChar()
-    if not char then return end
-    -- Equip đúng loại vũ khí trước
-    local toolTip = weapon  -- "Melee", "Sword", "Blox Fruit", "Gun"
-    for _, tool in ipairs(Plr.Backpack:GetChildren()) do
-        if tool:IsA("Tool") and tool.ToolTip == toolTip then
-            char.Humanoid:EquipTool(tool)
-            break
+function CombatModule.UseSkill(weaponTip, key)
+    pcall(function()
+        local char = getChar()
+        if not char then return end
+        for _, tool in ipairs(Plr.Backpack:GetChildren()) do
+            if tool:IsA("Tool") and tool.ToolTip == weaponTip then
+                char.Humanoid:EquipTool(tool)
+                break
+            end
         end
-    end
-    task.wait(0.05)
-    pressKey(key)
+        task.wait(0.05)
+        pressKey(key)
+    end)
 end
 
 function CombatModule.FastAttack()
-    local char = getChar()
-    if not char then return end
-    if not char:FindFirstChildOfClass("Tool") then return end
-
-    local mobs = MobModule.GetAlive(nil)
-    if #mobs == 0 then return end
-
-    local targetParts = {}
-    for _, mob in ipairs(mobs) do
-        local head = mob:FindFirstChild("Head")
-        if head then table.insert(targetParts, { mob, head }) end
-    end
-    if #targetParts == 0 then return end
-
     pcall(function()
-        Remotes.RegisterAttack:FireServer(CFG.AttackRate)
-        Remotes.RegisterHit:FireServer(targetParts[1][2], targetParts)
+        local char = getChar()
+        if not char or not char:FindFirstChildOfClass("Tool") then return end
+        local mobs = MobModule.GetAlive(nil)
+        if #mobs == 0 then return end
+        local parts = {}
+        for _, mob in ipairs(mobs) do
+            local h = mob:FindFirstChild("Head")
+            if h then table.insert(parts, {mob, h}) end
+        end
+        if #parts == 0 then return end
+        Remote.RegisterAttack:FireServer(CFG.AttackRate)
+        Remote.RegisterHit:FireServer(parts[1][2], parts)
     end)
 end
 
 --==============================================================================
--- SECTION 10 : __NAMECALL HOOK  (học từ BoneHub — MousePos injection)
---   Khi bật, mọi skill:FireServer() sẽ tự inject vị trí của mob đích
---   vào tham số thứ 2 (MousePos) — aimbot không cần biết tên remote.
+-- SECTION 10: NAMECALL HOOK  (BoneHub MousePos injection)
 --==============================================================================
-local NamecallModule = {}
-NamecallModule.enabled = false
-NamecallModule._orig   = nil
-
-local _MousePos = Vector3.zero  -- cập nhật liên tục bên dưới
+local NamecallModule = { enabled = false, _hooked = false }
+local _MousePos = Vector3.zero
 
 function NamecallModule.Enable()
-    if NamecallModule._orig then return end  -- đã hook rồi
-    local gg  = getrawmetatable(game)
-    local old = gg.__namecall
-    NamecallModule._orig = old
-    setreadonly(gg, false)
-
-    gg.__namecall = newcclosure(function(...)
-        local method = getnamecallmethod()
-        local args   = { ... }
-        if NamecallModule.enabled and tostring(method) == "FireServer" then
-            if tostring(args[1]) == "RemoteEvent" then
-                -- Inject MousePos vào args[2] nếu đang farm/aura
-                args[2] = _MousePos
-                return old(unpack(args))
+    if NamecallModule._hooked then
+        NamecallModule.enabled = true
+        return
+    end
+    pcall(function()
+        local gg  = getrawmetatable(game)
+        local old = gg.__namecall
+        setreadonly(gg, false)
+        gg.__namecall = newcclosure(function(...)
+            local method = getnamecallmethod()
+            local args   = {...}
+            if NamecallModule.enabled and tostring(method) == "FireServer" then
+                if tostring(args[1]) == "RemoteEvent" then
+                    args[2] = _MousePos
+                    return old(unpack(args))
+                end
             end
-        end
-        return old(...)
+            return old(...)
+        end)
+        setreadonly(gg, true)
+        NamecallModule._hooked  = true
+        NamecallModule.enabled  = true
     end)
-
-    setreadonly(gg, true)
 end
 
 function NamecallModule.Disable()
     NamecallModule.enabled = false
-    -- Không unhook vì không thể restore an toàn — chỉ tắt flag
 end
 
--- Cập nhật _MousePos về HRP của mob gần nhất
 task.spawn(function()
     while task.wait(0.1) do
         pcall(function()
             if NamecallModule.enabled then
                 local mobs = MobModule.GetAlive(nil)
                 if #mobs > 0 then
-                    local hrp = mobs[1]:FindFirstChild("HumanoidRootPart")
-                    if hrp then _MousePos = hrp.Position end
+                    local h = mobs[1]:FindFirstChild("HumanoidRootPart")
+                    if h then _MousePos = h.Position end
                 end
             end
         end)
@@ -444,156 +401,66 @@ task.spawn(function()
 end)
 
 --==============================================================================
--- SECTION 11 : INVENTORY HELPERS  (học từ BoneHub)
---==============================================================================
-local Inventory = {}
-
--- Lấy tool từ Backpack hoặc Character đang equip
-function Inventory.GetBP(name)
-    return Plr.Backpack:FindFirstChild(name)
-        or (getChar() and getChar():FindFirstChild(name))
-end
-
--- Kiểm tra item trong inventory server-side
-function Inventory.Has(name)
-    local ok, inv = pcall(function()
-        return Remotes.CommF:InvokeServer("getInventory")
-    end)
-    if not ok or type(inv) ~= "table" then return false end
-    for _, v in ipairs(inv) do
-        if type(v) == "table" and v.Name == name then return true end
-    end
-    return false
-end
-
--- Đếm số lượng material
-function Inventory.GetMaterialCount(name)
-    local ok, inv = pcall(function()
-        return Remotes.CommF:InvokeServer("getInventory")
-    end)
-    if not ok or type(inv) ~= "table" then return 0 end
-    for _, v in ipairs(inv) do
-        if type(v) == "table" and v.Type == "Material" and v.Name == name then
-            return v.Count or 0
-        end
-    end
-    return 0
-end
-
--- Kiểm tra có sword tên này không
-function Inventory.HasSword(name)
-    if Inventory.GetBP(name) then return true end
-    local ok, inv = pcall(function()
-        return Remotes.CommF:InvokeServer("getInventory")
-    end)
-    if not ok or type(inv) ~= "table" then return false end
-    for _, v in ipairs(inv) do
-        if type(v) == "table" and v.Type == "Sword" and v.Name == name then
-            return true
-        end
-    end
-    return false
-end
-
---==============================================================================
--- SECTION 12 : FPS BOOSTER MODULE  (học từ BoneHub — 5 lớp tối ưu)
+-- SECTION 11: FPS BOOSTER  (BoneHub 6-layer)
 --==============================================================================
 local FPSModule = {}
 
 function FPSModule.Boost()
-    local L = Services.Lighting
-    local T = WS.Terrain
+    pcall(function()
+        local L = Lighting
+        local T = WS.Terrain
+        pcall(function() sethiddenproperty(L,"Technology",2) end)
+        pcall(function() sethiddenproperty(T,"Decoration",false) end)
+        T.WaterWaveSize    = 0 ; T.WaterWaveSpeed   = 0
+        T.WaterReflectance = 0 ; T.WaterTransparency= 1
+        L.GlobalShadows    = false ; L.FogEnd = 9e9 ; L.FogStart = 0
+        L.Brightness       = 1.5 ; L.ClockTime = 12 ; L.GeographicLatitude = 0
+        L.Ambient = Color3.new(1,1,1) ; L.OutdoorAmbient = Color3.new(1,1,1)
+        settings().Rendering.QualityLevel = "Level01"
 
-    -- Layer 1: Rendering backend → Compatibility (thấp nhất)
-    pcall(function() sethiddenproperty(L, "Technology", 2) end)
-    pcall(function() sethiddenproperty(T, "Decoration", false) end)
-
-    -- Layer 2: Terrain water
-    T.WaterWaveSize    = 0
-    T.WaterWaveSpeed   = 0
-    T.WaterReflectance = 0
-    T.WaterTransparency= 1
-
-    -- Layer 3: Lighting globals
-    L.GlobalShadows         = false
-    L.FogEnd                = 9e9
-    L.FogStart              = 0
-    L.Brightness            = 1.5
-    L.Ambient               = Color3.new(1,1,1)
-    L.OutdoorAmbient        = Color3.new(1,1,1)
-    L.ClockTime             = 12
-    L.GeographicLatitude    = 0
-    L.ExposureCompensation  = 0.5
-
-    -- Layer 4: Chất lượng render
-    settings().Rendering.QualityLevel = "Level01"
-
-    -- Layer 5: Dọn sạch PostFX + Particles + Lights + Sounds trong workspace
-    local function removeEffect(obj)
-        if not obj or not obj.Parent then return end
-        local cls = obj.ClassName
-        if cls == "Decal" or cls == "Texture" then
-            obj:Destroy()
-        elseif cls == "Part" or cls == "Union" or cls == "MeshPart" then
-            obj.Material    = Enum.Material.SmoothPlastic
-            obj.Reflectance = 0
-            if cls == "MeshPart" then obj.TextureID = "" end
-        elseif cls == "ParticleEmitter" or cls == "Trail"
-            or cls == "Fire"          or cls == "Smoke"
-            or cls == "Sparkles" then
-            obj.Enabled = false
-            obj:Destroy()
-        elseif cls == "SpotLight" or cls == "PointLight"
-            or cls == "SurfaceLight" then
-            obj.Enabled = false
-            obj:Destroy()
-        elseif cls == "Beam" then
-            obj.Enabled = false
-            obj:Destroy()
-        elseif cls == "Sound" then
-            obj:Stop()
-            obj:Destroy()
+        local function rm(obj)
+            if not obj or not obj.Parent then return end
+            local cls = obj.ClassName
+            if cls=="ParticleEmitter" or cls=="Trail" or cls=="Fire"
+            or cls=="Smoke"          or cls=="Sparkles" then
+                pcall(function() obj.Enabled=false obj:Destroy() end)
+            elseif cls=="SpotLight" or cls=="PointLight" or cls=="SurfaceLight" then
+                pcall(function() obj.Enabled=false obj:Destroy() end)
+            elseif cls=="Beam" then
+                pcall(function() obj.Enabled=false obj:Destroy() end)
+            elseif cls=="Sound" then
+                pcall(function() obj:Stop() obj:Destroy() end)
+            elseif cls=="Decal" or cls=="Texture" then
+                pcall(function() obj:Destroy() end)
+            end
         end
-    end
 
-    -- Xóa Atmosphere
-    local atm = L:FindFirstChild("Atmosphere")
-    if atm then atm:Destroy() end
-
-    -- Xóa PostEffect trong Lighting
-    for _, e in ipairs(L:GetChildren()) do
-        if e:IsA("PostEffect") then
-            e.Enabled = false
-            e:Destroy()
+        local atm = L:FindFirstChild("Atmosphere")
+        if atm then pcall(function() atm:Destroy() end) end
+        for _, e in ipairs(L:GetChildren()) do
+            if e:IsA("PostEffect") then
+                pcall(function() e.Enabled=false e:Destroy() end)
+            end
         end
-    end
-
-    -- Scan toàn bộ Workspace
-    for _, v in ipairs(WS:GetDescendants()) do
-        removeEffect(v)
-    end
-
-    -- Layer 6: GC × 2 (mark + sweep)
-    task.wait(0.5)
-    collectgarbage()
-    collectgarbage()
-
-    return true
+        for _, v in ipairs(WS:GetDescendants()) do rm(v) end
+    end)
+    task.delay(0.5, function() collectgarbage() collectgarbage() end)
 end
 
 --==============================================================================
--- SECTION 13 : SERVER HOP MODULE  (học từ BoneHub)
+-- SECTION 12: SERVER HOP
 --==============================================================================
 local HopModule = {}
 
 function HopModule.Hop()
     pcall(function()
-        for count = math.random(1, 50), 100 do
-            local result = Remotes.ServerBrowser:InvokeServer(count)
-            if type(result) == "table" then
-                for serverId, data in next, result do
-                    if tonumber(data["Count"] or data["Players"] or 99) < CFG.HopMaxPlayers then
-                        TP:TeleportToPlaceInstance(game.PlaceId, serverId)
+        for i = math.random(1,50), 100 do
+            local res = Remote.ServerBrowser:InvokeServer(i)
+            if type(res) == "table" then
+                for sid, data in next, res do
+                    local cnt = tonumber(type(data)=="table" and (data.Count or data.Players or 99) or 99) or 99
+                    if cnt < CFG.HopMaxPlayers then
+                        TP_SVC:TeleportToPlaceInstance(game.PlaceId, sid)
                         return
                     end
                 end
@@ -603,178 +470,188 @@ function HopModule.Hop()
 end
 
 --==============================================================================
--- SECTION 14 : TEAM MODULE
+-- SECTION 13: TEAM MODULE
 --==============================================================================
 local TeamModule = {}
-
-function TeamModule.Join(teamName)
-    if Plr.Team and Plr.Team.Name == teamName then return end
-    pcall(function() Remotes.CommF:InvokeServer("SetTeam", teamName) end)
+function TeamModule.Join(team)
+    pcall(function()
+        if Plr.Team and Plr.Team.Name == team then return end
+        Remote.CommF:InvokeServer("SetTeam", team)
+    end)
 end
 
 --==============================================================================
--- SECTION 15 : BYPASS MODULE
+-- SECTION 14: BYPASS MODULE
 --==============================================================================
 local BypassModule = {}
-
 function BypassModule.Apply()
-    -- Mỗi hook tách pcall riêng → 1 cái lỗi không kéo theo cái khác
+    pcall(function() hookfunction(require(RS.Effect.Container.Death),   function() end) end)
+    pcall(function() hookfunction(require(RS.Effect.Container.Respawn), function() end) end)
     pcall(function()
-        hookfunction(require(RS.Effect.Container.Death), function() end)
-    end)
-    pcall(function()
-        hookfunction(require(RS.Effect.Container.Respawn), function() end)
-    end)
-    pcall(function()
-        -- FindFirstChild thay vì WaitForChild (không yield vô hạn)
         local gm = RS:FindFirstChild("GuideModule")
         if gm then
-            local mod = require(gm)
-            if mod and mod.ChangeDisplayedNPC then
-                hookfunction(mod.ChangeDisplayedNPC, function() end)
+            local m = require(gm)
+            if m and m.ChangeDisplayedNPC then
+                hookfunction(m.ChangeDisplayedNPC, function() end)
             end
         end
     end)
-    -- Xóa đá chướng ngại
     pcall(function()
-        local rock = WS:FindFirstChild("Rocks")
-        if rock then rock:Destroy() end
+        local r = WS:FindFirstChild("Rocks")
+        if r then r:Destroy() end
     end)
 end
 
 --==============================================================================
--- SECTION 16 : QUEST MODULE
+-- SECTION 15: QUEST MODULE
 --==============================================================================
 local QuestModule = {}
 
-function QuestModule.GetCurrentData()
-    local ok, level = pcall(function() return Plr.Data.Level.Value end)
+function QuestModule.GetData()
+    local ok, lv = pcall(function() return Plr.Data.Level.Value end)
     if not ok then return nil end
-    for _, entry in ipairs(QUEST_DB) do
-        if level >= entry.minLv and level <= entry.maxLv then
-            return entry
-        end
+    for _, e in ipairs(QUEST_DB) do
+        if lv >= e.minLv and lv <= e.maxLv then return e end
     end
-    return nil
 end
 
-function QuestModule.HasActiveQuest()
-    local g = Plr:FindFirstChild("PlayerGui")
-    return g and g:FindFirstChild("Main")
-              and g.Main:FindFirstChild("Quest")
-              and g.Main.Quest.Visible
+function QuestModule.HasActive()
+    local ok, v = pcall(function()
+        local g = Plr.PlayerGui
+        return g.Main.Quest.Visible
+    end)
+    return ok and v or false
 end
 
-function QuestModule.GetActiveTitle()
-    local label = safeFind(Plr, "PlayerGui", "Main", "Quest", "Container", "QuestTitle", "Title")
-    return label and label.Text or ""
+function QuestModule.GetTitle()
+    local ok, v = pcall(function()
+        return Plr.PlayerGui.Main.Quest.Container.QuestTitle.Title.Text
+    end)
+    return ok and v or ""
 end
 
 function QuestModule.Abandon()
-    pcall(function() Remotes.CommF:InvokeServer("AbandonQuest") end)
+    pcall(function() Remote.CommF:InvokeServer("AbandonQuest") end)
 end
 
-function QuestModule.Accept(data)
-    pcall(function() Remotes.CommF:InvokeServer("StartQuest", data.QuestName, data.QuestNum) end)
+function QuestModule.Accept(d)
+    pcall(function() Remote.CommF:InvokeServer("StartQuest", d.QuestName, d.QuestNum) end)
 end
 
 --==============================================================================
--- SECTION 17 : AUTO FARM STATE MACHINE
---   States: IDLE → GET_QUEST → TRAVEL_TO_NPC → ACCEPT_QUEST
---           → FIND_MOB → COMBAT → (back to GET_QUEST)
+-- SECTION 16: AUTO FARM STATE MACHINE
 --==============================================================================
-local AutoFarm = { state = "IDLE", questData = nil, cooldown = 0 }
+local AutoFarm = { state="IDLE", data=nil, cooldown=0 }
 
-local function autoFarmTick()
+local function farmTick()
     if AutoFarm.state == "IDLE" then return end
     local now = tick()
     if now < AutoFarm.cooldown then return end
-
     local hrp = getHRP()
     if not hrp then return end
 
     if AutoFarm.state == "GET_QUEST" then
-        AutoFarm.questData = QuestModule.GetCurrentData()
-        if not AutoFarm.questData then return end
-
-        if QuestModule.HasActiveQuest() then
-            local title = QuestModule.GetActiveTitle()
-            if not string.find(title, AutoFarm.questData.MobName, 1, true) then
+        AutoFarm.data = QuestModule.GetData()
+        if not AutoFarm.data then return end
+        if QuestModule.HasActive() then
+            if not string.find(QuestModule.GetTitle(), AutoFarm.data.MobName, 1, true) then
                 QuestModule.Abandon()
-                AutoFarm.cooldown = now + 0.6
+                AutoFarm.cooldown = now + 0.7
             else
                 AutoFarm.state = "FIND_MOB"
             end
         else
-            AutoFarm.state = "TRAVEL_TO_NPC"
+            AutoFarm.state = "TRAVEL_NPC"
         end
 
-    elseif AutoFarm.state == "TRAVEL_TO_NPC" then
-        local npcPos = AutoFarm.questData.NPCPos
-        TpModule.Go(npcPos, CFG.BringSpeed)
-        if (hrp.Position - npcPos.Position).Magnitude < 10 then
-            AutoFarm.state    = "ACCEPT_QUEST"
+    elseif AutoFarm.state == "TRAVEL_NPC" then
+        TpModule.Go(AutoFarm.data.NPCPos)
+        if (hrp.Position - AutoFarm.data.NPCPos.Position).Magnitude < 10 then
+            AutoFarm.state = "ACCEPT"
         end
 
-    elseif AutoFarm.state == "ACCEPT_QUEST" then
-        QuestModule.Accept(AutoFarm.questData)
+    elseif AutoFarm.state == "ACCEPT" then
+        QuestModule.Accept(AutoFarm.data)
         AutoFarm.cooldown = now + 0.7
         AutoFarm.state    = "FIND_MOB"
 
     elseif AutoFarm.state == "FIND_MOB" then
-        if not QuestModule.HasActiveQuest() then
-            AutoFarm.state = "GET_QUEST"
-            return
+        if not QuestModule.HasActive() then
+            AutoFarm.state = "GET_QUEST" return
         end
-
-        local mobs = MobModule.GetAlive(AutoFarm.questData.MobName)
+        local mobs = MobModule.GetAlive(AutoFarm.data.MobName)
         if #mobs == 0 then return end
-
-        local target    = mobs[1]
-        local targetHRP = target:FindFirstChild("HumanoidRootPart")
-        if not targetHRP then return end
-
-        -- Bay cao hơn mob, dùng TpModule thay vì TweenCFrame trực tiếp
-        local flyTarget = targetHRP.CFrame + CFG.FlyOffset
-        TpModule.Go(flyTarget, CFG.BringSpeed)
-
-        -- Gom quái về centroid
-        MobModule.BringAll(AutoFarm.questData.MobName)
+        local tHRP = mobs[1]:FindFirstChild("HumanoidRootPart")
+        if not tHRP then return end
+        TpModule.Go(tHRP.CFrame + AutoFarm.data.FlyOffset or CFG.FlyOffset)
+        MobModule.BringAll(AutoFarm.data.MobName)
     end
 end
 
 function AutoFarm.Start()
+    local hrp = getHRP()
+    if hrp and _anchor then _anchor.CFrame = hrp.CFrame end
     TpModule.SetActive(true)
     AutoFarm.state = "GET_QUEST"
-    -- Cập nhật anchor về vị trí hiện tại để tránh nhảy xa
-    local hrp = getHRP()
-    if hrp then _anchor.CFrame = hrp.CFrame end
 end
 
 function AutoFarm.Stop()
     AutoFarm.state = "IDLE"
     TpModule.SetActive(false)
-    if TpModule._tween then TpModule._tween:Cancel() end
-    -- Cleanup BodyVelocity cũ (compat với v2)
-    local hrp = getHRP()
-    if hrp then
-        local bv = hrp:FindFirstChild("NemoHoverBV")
-        if bv then bv:Destroy() end
-    end
+    pcall(function() if TpModule._tween then TpModule._tween:Cancel() end end)
 end
 
 --==============================================================================
--- SECTION 18 : UI  (FLUENT)
+-- SECTION 17: STAT UPGRADE MODULE
 --==============================================================================
-local Fluent = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua"
-))()
+local StatModule = {}
+StatModule.enabled  = false
+StatModule.statType = "Melee"
+StatModule.amount   = 10
 
-local seaLabel = World.Sea1 and "Sea 1" or World.Sea2 and "Sea 2" or "Sea 3"
+local _statMap = {
+    Melee = "Melee", Defense = "Defense",
+    Sword = "Sword", Gun = "Gun", ["Blox Fruit"] = "Demon Fruit"
+}
+
+function StatModule.Upgrade()
+    pcall(function()
+        if not StatModule.enabled then return end
+        local key = _statMap[StatModule.statType]
+        if not key then return end
+        local ok, pts = pcall(function() return Plr.Data.Points.Value end)
+        if ok and pts and pts > 0 then
+            Remote.CommF:InvokeServer("AddPoint", key, StatModule.amount)
+        end
+    end)
+end
+
+--==============================================================================
+-- SECTION 18: UI — FLUENT + SAVEMANAGER + INTERFACEMANAGER
+--==============================================================================
+-- Load đúng cách: 3 return values
+local Fluent, SaveManager, InterfaceManager = loadstring(
+    game:HttpGet("https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua")
+)()
+
+-- Fallback nếu SaveManager/InterfaceManager không tồn tại trong bản này
+SaveManager      = SaveManager      or { SetLibrary = noop, IgnoreThemeSettings = noop, SetFolder = noop, BuildConfigSection = noop, LoadAutoloadConfig = noop }
+InterfaceManager = InterfaceManager or { SetLibrary = noop, SetFolder = noop, BuildInterfaceSection = noop }
+
+-- Cấu hình SaveManager & InterfaceManager
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetFolder("NemoHub")
+InterfaceManager:SetFolder("NemoHub")
+
+-- Lấy level an toàn
+local _ok, _lv = pcall(function() return Plr.Data.Level.Value end)
+local _lvStr    = tostring(_ok and _lv or "?")
 
 local Window = Fluent:CreateWindow({
     Title       = "Nemo Hub",
-    SubTitle    = "v3.0  |  " .. seaLabel,
+    SubTitle    = "v4.0  |  " .. seaLabel .. "  |  Lv " .. _lvStr,
     TabWidth    = 160,
     Size        = CFG.WindowSize,
     Acrylic     = true,
@@ -785,120 +662,163 @@ local Window = Fluent:CreateWindow({
 local Tabs = {
     Main   = Window:AddTab({ Title = "Main",    Icon = "home" }),
     Combat = Window:AddTab({ Title = "Combat",  Icon = "swords" }),
+    Player = Window:AddTab({ Title = "Player",  Icon = "user" }),
     Misc   = Window:AddTab({ Title = "Misc",    Icon = "star" }),
     Config = Window:AddTab({ Title = "Config",  Icon = "settings" }),
+    Saves  = Window:AddTab({ Title = "Saves",   Icon = "save" }),
 }
 
---──────────────────────── TAB MAIN ───────────────────────────────────────────
+---------------------------------------------------------------------------
+-- TAB: MAIN — Team
+---------------------------------------------------------------------------
+Tabs.Main:AddParagraph({
+    Title   = "World Detection",
+    Content = "Đang chạy tại: " .. seaLabel .. "  |  Level: " .. _lvStr
+})
+
 Tabs.Main:AddButton({
     Title    = "Join Marines",
+    Description = "Vào phe Hải Quân",
     Callback = function()
         TeamModule.Join("Marines")
-        Fluent:Notify({ Title = "Nemo Hub", Content = "Đã vào team Marines", Duration = 3 })
+        Fluent:Notify({ Title="Team", Content="✅ Joined Marines", Duration=3 })
     end,
 })
 
 Tabs.Main:AddButton({
     Title    = "Join Pirates",
+    Description = "Vào phe Cướp Biển",
     Callback = function()
         TeamModule.Join("Pirates")
-        Fluent:Notify({ Title = "Nemo Hub", Content = "Đã vào team Pirates", Duration = 3 })
+        Fluent:Notify({ Title="Team", Content="✅ Joined Pirates", Duration=3 })
     end,
 })
 
 Tabs.Main:AddDivider()
 
-do
-    local _ok, _lv = pcall(function() return Plr.Data.Level.Value end)
-    Tabs.Main:AddLabel("World: " .. seaLabel .. "  |  Level: " .. tostring(_ok and _lv or "?"))
-end
+Tabs.Main:AddButton({
+    Title    = "Rejoin Server",
+    Description = "Thoát và vào lại server hiện tại",
+    Callback = function()
+        pcall(function() TP_SVC:Teleport(game.PlaceId, Plr) end)
+    end,
+})
 
---──────────────────────── TAB COMBAT ─────────────────────────────────────────
-local FastAttackEnabled = false
-local KillAuraEnabled   = false
-local AimbotEnabled     = false
+Tabs.Main:AddButton({
+    Title    = "Server Hop",
+    Description = "Tìm server < " .. CFG.HopMaxPlayers .. " người",
+    Callback = function()
+        Fluent:Notify({ Title="Server Hop", Content="🔍 Đang tìm...", Duration=3 })
+        HopModule.Hop()
+    end,
+})
 
-Tabs.Combat:AddToggle("AutoFarmLevel", {
+---------------------------------------------------------------------------
+-- TAB: COMBAT
+---------------------------------------------------------------------------
+local _fastEnabled  = false
+local _auraEnabled  = false
+local _aimbotEnabled= false
+
+Tabs.Combat:AddToggle("AutoFarm", {
     Title       = "Auto Farm Level",
-    Description = "State machine: nhận quest → tìm mob → farm",
+    Description = "Tự động nhận quest → tìm mob → farm (State Machine)",
     Default     = false,
 }):OnChanged(function(v)
     if v then AutoFarm.Start() else AutoFarm.Stop() end
 end)
 
+Tabs.Combat:AddDivider()
+
 Tabs.Combat:AddToggle("FastAttack", {
-    Title       = "Fast Attack (Remote Fire)",
+    Title       = "Fast Attack",
     Description = "Bắn RegisterHit remote liên tục",
     Default     = false,
-}):OnChanged(function(v) FastAttackEnabled = v end)
+}):OnChanged(function(v) _fastEnabled = v end)
 
 Tabs.Combat:AddToggle("KillAura", {
-    Title       = "Kill Aura (Centroid Bring)",
-    Description = "Hút quái về centroid + lock + xóa Animator",
+    Title       = "Kill Aura  (Centroid Bring)",
+    Description = "Hút quái về centroid + xóa Animator + lock",
     Default     = false,
-}):OnChanged(function(v) KillAuraEnabled = v end)
+}):OnChanged(function(v) _auraEnabled = v end)
 
 Tabs.Combat:AddToggle("Aimbot", {
-    Title       = "Skill Aimbot (__namecall hook)",
+    Title       = "Skill Aimbot  (__namecall)",
     Description = "Inject vị trí mob vào mọi skill FireServer",
     Default     = false,
 }):OnChanged(function(v)
-    AimbotEnabled = v
-    if v then
-        NamecallModule.enabled = true
-        NamecallModule.Enable()
-    else
-        NamecallModule.Disable()
-    end
+    _aimbotEnabled = v
+    if v then NamecallModule.Enable() else NamecallModule.Disable() end
 end)
 
---──────────────────────── TAB MISC ───────────────────────────────────────────
-Tabs.Misc:AddButton({
-    Title    = "FPS Booster",
-    Description = "5-layer optimization + GC×2",
-    Callback = function()
-        local ok = FPSModule.Boost()
-        Fluent:Notify({
-            Title   = "FPS Booster",
-            Content = ok and "Đã tối ưu! Check FPS counter." or "Lỗi khi boost.",
-            Duration= 4
-        })
-    end,
+Tabs.Combat:AddDivider()
+
+Tabs.Combat:AddButton({
+    Title    = "Use Skill Z",
+    Callback = function() CombatModule.UseSkill("Blox Fruit","Z") end,
+})
+Tabs.Combat:AddButton({
+    Title    = "Use Skill X",
+    Callback = function() CombatModule.UseSkill("Blox Fruit","X") end,
+})
+Tabs.Combat:AddButton({
+    Title    = "Use Skill C",
+    Callback = function() CombatModule.UseSkill("Blox Fruit","C") end,
 })
 
-Tabs.Misc:AddButton({
-    Title    = "Server Hop",
-    Description = "Tìm server < " .. CFG.HopMaxPlayers .. " người",
-    Callback = function()
-        Fluent:Notify({ Title = "Server Hop", Content = "Đang tìm server...", Duration = 3 })
-        HopModule.Hop()
-    end,
+---------------------------------------------------------------------------
+-- TAB: PLAYER
+---------------------------------------------------------------------------
+Tabs.Player:AddParagraph({
+    Title   = "Auto Upgrade Stats",
+    Content = "Tự động phân điểm theo loại và số lượng đã chọn"
 })
 
-Tabs.Misc:AddDivider()
+local _statTypeRef = { "Melee", "Defense", "Sword", "Gun", "Blox Fruit" }
 
-Tabs.Misc:AddButton({
-    Title    = "Collect Nearby Fruits",
-    Description = "Kéo tất cả Devil Fruit vào người",
-    Callback = function()
-        local char = getChar()
-        if not char then return end
-        for _, v in ipairs(WS:GetChildren()) do
-            if string.find(v.Name, "Fruit") then
-                local handle = v:FindFirstChild("Handle")
-                if handle then handle.CFrame = char.HumanoidRootPart.CFrame end
-            end
-        end
-        Fluent:Notify({ Title = "Collect", Content = "Đã kéo fruits về!", Duration = 3 })
-    end,
+Tabs.Player:AddDropdown("StatType", {
+    Title   = "Loại Stats",
+    Values  = _statTypeRef,
+    Multi   = false,
+    Default = 1,
+}):OnChanged(function(v)
+    StatModule.statType = v
+end)
+
+Tabs.Player:AddSlider("StatAmount", {
+    Title    = "Số điểm mỗi lần",
+    Minimum  = 1, Maximum = 100, Default = 10,
+    Callback = function(v) StatModule.amount = v end,
 })
 
-Tabs.Misc:AddButton({
+Tabs.Player:AddToggle("AutoStats", {
+    Title   = "Auto Upgrade Stats",
+    Default = false,
+}):OnChanged(function(v) StatModule.enabled = v end)
+
+Tabs.Player:AddDivider()
+
+Tabs.Player:AddButton({
+    Title    = "Change Buso Haki State 0",
+    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage",0) end) end,
+})
+Tabs.Player:AddButton({
+    Title    = "Change Buso Haki State 3",
+    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage",3) end) end,
+})
+Tabs.Player:AddButton({
+    Title    = "Change Buso Haki State 5",
+    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage",5) end) end,
+})
+
+Tabs.Player:AddDivider()
+
+Tabs.Player:AddButton({
     Title    = "Open Devil Fruit Shop",
     Callback = function()
         pcall(function()
-            local dlgCtrl  = require(RS.DialogueController)
-            local dlgList  = require(RS.DialoguesList)
+            local dlgCtrl = require(RS.DialogueController)
+            local dlgList = require(RS.DialoguesList)
             for k, v in pairs(dlgList) do
                 if tostring(k) == "FruitShop" then dlgCtrl:Start(v) end
             end
@@ -906,17 +826,87 @@ Tabs.Misc:AddButton({
     end,
 })
 
-Tabs.Misc:AddButton({
-    Title    = "Open Title Menu",
+Tabs.Player:AddButton({
+    Title    = "Open Titles Menu",
     Callback = function()
         pcall(function()
-            Remotes.CommF:InvokeServer("getTitles")
+            Remote.CommF:InvokeServer("getTitles")
             Plr.PlayerGui.Main.Titles.Visible = true
         end)
     end,
 })
 
---──────────────────────── TAB CONFIG ─────────────────────────────────────────
+Tabs.Player:AddButton({
+    Title    = "Open Awakening Menu",
+    Callback = function()
+        pcall(function()
+            Plr.PlayerGui.Main.AwakeningToggler.Visible = true
+        end)
+    end,
+})
+
+Tabs.Player:AddButton({
+    Title    = "Collect Nearby Fruits",
+    Description = "Kéo tất cả Devil Fruit trong workspace về người",
+    Callback = function()
+        pcall(function()
+            local hrp = getHRP()
+            if not hrp then return end
+            for _, v in ipairs(WS:GetChildren()) do
+                if string.find(v.Name, "Fruit") then
+                    local h = v:FindFirstChild("Handle")
+                    if h then h.CFrame = hrp.CFrame end
+                end
+            end
+        end)
+        Fluent:Notify({ Title="Collect", Content="✅ Kéo fruits về!", Duration=3 })
+    end,
+})
+
+---------------------------------------------------------------------------
+-- TAB: MISC
+---------------------------------------------------------------------------
+Tabs.Misc:AddButton({
+    Title       = "FPS Booster",
+    Description = "6-layer: Rendering + Water + Lighting + Quality + Effects + GC×2",
+    Callback    = function()
+        FPSModule.Boost()
+        Fluent:Notify({ Title="FPS Booster", Content="✅ Đã tối ưu!", Duration=4 })
+    end,
+})
+
+Tabs.Misc:AddDivider()
+
+Tabs.Misc:AddButton({
+    Title    = "Remove Rocks",
+    Callback = function()
+        pcall(function()
+            local r = WS:FindFirstChild("Rocks")
+            if r then r:Destroy() end
+        end)
+        Fluent:Notify({ Title="Clean", Content="✅ Đã xóa Rocks", Duration=3 })
+    end,
+})
+
+Tabs.Misc:AddButton({
+    Title    = "Apply Bypass",
+    Description = "Hook Death/Respawn effect (chạy tự động lúc load)",
+    Callback = function()
+        BypassModule.Apply()
+        Fluent:Notify({ Title="Bypass", Content="✅ Applied", Duration=3 })
+    end,
+})
+
+Tabs.Misc:AddDivider()
+
+Tabs.Misc:AddParagraph({
+    Title   = "Inventory Info",
+    Content = "Mở console để xem — dùng GetM / GetIn từ Inventory module"
+})
+
+---------------------------------------------------------------------------
+-- TAB: CONFIG
+---------------------------------------------------------------------------
 Tabs.Config:AddSlider("BringRadius", {
     Title    = "Bring Radius (studs)",
     Minimum  = 50, Maximum = 700, Default = CFG.BringRadius,
@@ -924,61 +914,74 @@ Tabs.Config:AddSlider("BringRadius", {
 })
 
 Tabs.Config:AddSlider("BringSpeed", {
-    Title    = "Tween Speed (studs/s)",
-    Minimum  = 50, Maximum = 800, Default = CFG.BringSpeed,
+    Title    = "Move Speed (studs/s)",
+    Minimum  = 50, Maximum = 1000, Default = CFG.BringSpeed,
     Callback = function(v) CFG.BringSpeed = v end,
 })
 
 Tabs.Config:AddSlider("AttackRate", {
-    Title    = "Attack Rate (× 0.01s)",
+    Title    = "Attack Rate (×0.01s)",
     Minimum  = 1, Maximum = 20, Default = CFG.AttackRate * 100,
     Callback = function(v) CFG.AttackRate = v / 100 end,
 })
 
 Tabs.Config:AddSlider("HopPlayers", {
-    Title    = "Hop: max players in server",
-    Minimum  = 2, Maximum = 30, Default = CFG.HopMaxPlayers,
+    Title    = "Hop: max player per server",
+    Minimum  = 2, Maximum = 50, Default = CFG.HopMaxPlayers,
     Callback = function(v) CFG.HopMaxPlayers = v end,
 })
 
---==============================================================================
--- SECTION 19 : MAIN LOOPS
---   Loop A — Heartbeat : combat tick (high frequency)
---   Loop B — 0.1s      : state machine + bring logic
---==============================================================================
-local _connections = {}
+Tabs.Config:AddDivider()
 
--- Loop A: Combat (Heartbeat)
-_connections[1] = Services.RunService.Heartbeat:Connect(function()
+Tabs.Config:AddKeybind("ToggleUI", {
+    Title   = "Toggle UI Key",
+    Mode    = "Toggle",
+    Default = "RightControl",
+    Callback = function() Window:ToggleMinimize() end,
+})
+
+---------------------------------------------------------------------------
+-- TAB: SAVES  (SaveManager + InterfaceManager)
+---------------------------------------------------------------------------
+-- Build section cài đặt theme vào tab Saves
+InterfaceManager:BuildInterfaceSection(Tabs.Saves)
+SaveManager:BuildConfigSection(Tabs.Saves)
+
+--==============================================================================
+-- SECTION 19: MAIN LOOPS
+--==============================================================================
+-- Loop A — Heartbeat: combat
+RunService.Heartbeat:Connect(function()
     local farming = AutoFarm.state ~= "IDLE"
-
-    if FastAttackEnabled or farming then
+    if _fastEnabled or farming then
         CombatModule.FastAttack()
     end
-
-    if KillAuraEnabled and not farming then
+    if _auraEnabled and not farming then
         MobModule.BringAll(nil)
     end
 end)
 
--- Loop B: State machine + auto-bring khi farm
+-- Loop B — 0.1s: state machine + stat upgrade
 task.spawn(function()
     while task.wait(0.1) do
-        pcall(autoFarmTick)
+        pcall(farmTick)
+        pcall(StatModule.Upgrade)
     end
 end)
 
 --==============================================================================
--- SECTION 20 : INIT  (UI trước, bypass sau — UI luôn hiện dù hook lỗi)
+-- SECTION 20: INIT — UI hiện trước, bypass sau qua task.defer
 --==============================================================================
 Window:SelectTab(1)
+SaveManager:LoadAutoloadConfig()
+
 Fluent:Notify({
-    Title   = "Nemo Hub v3",
-    Content = "Load thành công! World: " .. seaLabel,
-    Duration= 5
+    Title   = "Nemo Hub v4",
+    Content = "✅ Load xong!  " .. seaLabel .. "  |  Lv " .. _lvStr,
+    Duration= 5,
 })
 
--- Bypass chạy sau khi UI đã hiện — lỗi hook không ảnh hưởng UI
+-- Bypass chạy async sau khi UI đã hiện — lỗi hook không crash UI
 task.defer(function()
     BypassModule.Apply()
 end)
