@@ -618,13 +618,22 @@ end
 local BypassModule = {}
 
 function BypassModule.Apply()
+    -- Mỗi hook tách pcall riêng → 1 cái lỗi không kéo theo cái khác
     pcall(function()
-        hookfunction(require(RS.Effect.Container.Death),   function() end)
+        hookfunction(require(RS.Effect.Container.Death), function() end)
+    end)
+    pcall(function()
         hookfunction(require(RS.Effect.Container.Respawn), function() end)
-        hookfunction(require(RS:WaitForChild("GuideModule")).ChangeDisplayedNPC, function() end)
-        -- Hook error/warn để tránh console spam từ game script
-        hookfunction(error, function() end)
-        hookfunction(warn,  function() end)
+    end)
+    pcall(function()
+        -- FindFirstChild thay vì WaitForChild (không yield vô hạn)
+        local gm = RS:FindFirstChild("GuideModule")
+        if gm then
+            local mod = require(gm)
+            if mod and mod.ChangeDisplayedNPC then
+                hookfunction(mod.ChangeDisplayedNPC, function() end)
+            end
+        end
     end)
     -- Xóa đá chướng ngại
     pcall(function()
@@ -781,26 +790,28 @@ local Tabs = {
 }
 
 --──────────────────────── TAB MAIN ───────────────────────────────────────────
-local TeamDropdown = Tabs.Main:AddDropdown("TeamSelect", {
-    Title   = "Select Team",
-    Values  = { "Marines", "Pirates" },
-    Multi   = false,
-    Default = (CFG.Team == "Pirates") and 2 or 1,
+Tabs.Main:AddButton({
+    Title    = "Join Marines",
+    Callback = function()
+        TeamModule.Join("Marines")
+        Fluent:Notify({ Title = "Nemo Hub", Content = "Đã vào team Marines", Duration = 3 })
+    end,
 })
 
 Tabs.Main:AddButton({
-    Title    = "Join Selected Team",
+    Title    = "Join Pirates",
     Callback = function()
-        local team = TeamDropdown.Value
-        TeamModule.Join(team)
-        Fluent:Notify({ Title = "Nemo Hub", Content = "Đã đổi sang team " .. team, Duration = 3 })
+        TeamModule.Join("Pirates")
+        Fluent:Notify({ Title = "Nemo Hub", Content = "Đã vào team Pirates", Duration = 3 })
     end,
 })
 
 Tabs.Main:AddDivider()
 
-Tabs.Main:AddLabel("World: " .. seaLabel .. "  |  Level: " ..
-    tostring(pcall(function() return Plr.Data.Level.Value end) and Plr.Data.Level.Value or "?"))
+do
+    local _ok, _lv = pcall(function() return Plr.Data.Level.Value end)
+    Tabs.Main:AddLabel("World: " .. seaLabel .. "  |  Level: " .. tostring(_ok and _lv or "?"))
+end
 
 --──────────────────────── TAB COMBAT ─────────────────────────────────────────
 local FastAttackEnabled = false
@@ -958,13 +969,16 @@ task.spawn(function()
 end)
 
 --==============================================================================
--- SECTION 20 : INIT
+-- SECTION 20 : INIT  (UI trước, bypass sau — UI luôn hiện dù hook lỗi)
 --==============================================================================
-BypassModule.Apply()
-TeamModule.Join(CFG.Team)
 Window:SelectTab(1)
 Fluent:Notify({
     Title   = "Nemo Hub v3",
     Content = "Load thành công! World: " .. seaLabel,
     Duration= 5
 })
+
+-- Bypass chạy sau khi UI đã hiện — lỗi hook không ảnh hưởng UI
+task.defer(function()
+    BypassModule.Apply()
+end)
