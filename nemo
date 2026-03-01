@@ -1,5 +1,5 @@
 --========================================================================
--- [ NEMO HUB - BẢN HOÀN CHỈNH KẾT HỢP BONE HUB TECH ]
+-- [ NEMO HUB - PREMIUM AUTO FARM SCRIPT ]
 --========================================================================
 
 local Players = game:GetService("Players")
@@ -37,7 +37,38 @@ pcall(function()
 end)
 
 --========================================================================
--- 2. TÍNH NĂNG GOM QUÁI (BRING MOBS V2 - TỪ BONE HUB)
+-- 2. TỪ ĐIỂN NHIỆM VỤ (QUEST DATABASE) & LOGIC
+--========================================================================
+local function GetQuestData()
+    local level = Plr.Data.Level.Value
+    if level >= 1 and level <= 14 then
+        return { NPCName = "Bandit Quest Giver", QuestName = "BanditQuest1", QuestNum = 1, MobName = "Bandit", NPCPos = CFrame.new(1059.37, 15.44, 1550.42) }
+    elseif level >= 15 and level <= 29 then
+        if level <= 19 then
+            return { NPCName = "Adventurer", QuestName = "JungleQuest", QuestNum = 1, MobName = "Monkey", NPCPos = CFrame.new(-1594, 36.8, 153.3) }
+        else
+            return { NPCName = "Adventurer", QuestName = "JungleQuest", QuestNum = 2, MobName = "Gorilla", NPCPos = CFrame.new(-1594, 36.8, 153.3) }
+        end
+    elseif level >= 30 and level <= 59 then
+        if level <= 39 then
+            return { NPCName = "Pirate", QuestName = "BuggyQuest1", QuestNum = 1, MobName = "Pirate", NPCPos = CFrame.new(-1141, 4.7, 3827) }
+        else
+            return { NPCName = "Pirate", QuestName = "BuggyQuest1", QuestNum = 2, MobName = "Brute", NPCPos = CFrame.new(-1141, 4.7, 3827) }
+        end
+    end
+    return nil -- Bổ sung thêm level ở đây sau
+end
+
+local function HasQuest()
+    local playerGui = Plr:FindFirstChild("PlayerGui")
+    if playerGui and playerGui:FindFirstChild("Main") and playerGui.Main:FindFirstChild("Quest") then
+        return playerGui.Main.Quest.Visible
+    end
+    return false
+end
+
+--========================================================================
+-- 3. TÍNH NĂNG GOM QUÁI & DI CHUYỂN (BRING MOBS / TWEEN)
 --========================================================================
 local function TweenObject(Object, Pos, Speed)
     Speed = Speed or 300
@@ -61,38 +92,31 @@ local function GetMobPosition(EnemiesName)
     return pos / count
 end
 
-local function ExecuteBringMobs()
+local function ExecuteBringMobs(TargetMobName)
     local enemies = Workspace.Enemies:GetChildren()
     if #enemies == 0 then return end
 
-    local totalpos = {}
-    for _, v in pairs(enemies) do
-        if not totalpos[v.Name] then
-            totalpos[v.Name] = GetMobPosition(v.Name)
-        end
-    end
+    local mobPos = GetMobPosition(TargetMobName)
+    if not mobPos then return end
 
     for _, v in pairs(Workspace.Enemies:GetChildren()) do
-        if v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart") then
+        if v.Name == TargetMobName and v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart") then
             local hrp = v.HumanoidRootPart
             local humanoid = v.Humanoid
             
             if humanoid.Health > 0 and Plr.Character and Plr.Character:FindFirstChild("HumanoidRootPart") then
                 if (hrp.Position - Plr.Character.HumanoidRootPart.Position).Magnitude <= 350 then
-                    local mobPos = totalpos[v.Name]
-                    if mobPos then
-                        local TargetCFrame = CFrame.new(mobPos.X, mobPos.Y, mobPos.Z)
-                        local Distance = (hrp.Position - TargetCFrame.Position).Magnitude
+                    local TargetCFrame = CFrame.new(mobPos.X, mobPos.Y, mobPos.Z)
+                    local Distance = (hrp.Position - TargetCFrame.Position).Magnitude
 
-                        if Distance > 3 and Distance <= 280 then
-                            TweenObject(hrp, TargetCFrame, 300)
-                            hrp.CanCollide = false
-                            humanoid.WalkSpeed = 0
-                            humanoid.JumpPower = 0
-                            pcall(function()
-                                sethiddenproperty(Plr, "SimulationRadius", math.huge)
-                            end)
-                        end
+                    if Distance > 3 and Distance <= 280 then
+                        TweenObject(hrp, TargetCFrame, 300)
+                        hrp.CanCollide = false
+                        humanoid.WalkSpeed = 0
+                        humanoid.JumpPower = 0
+                        pcall(function()
+                            sethiddenproperty(Plr, "SimulationRadius", math.huge)
+                        end)
                     end
                 end
             end
@@ -101,7 +125,7 @@ local function ExecuteBringMobs()
 end
 
 --========================================================================
--- 3. FAST ATTACK MODULE (SECURE HIT)
+-- 4. FAST ATTACK MODULE
 --========================================================================
 local FastAttackModule = {}
 FastAttackModule.Rate = 0.05 
@@ -128,9 +152,7 @@ function FastAttackModule.GetTargetParts(targets)
     local targetParts = {}
     for _, target in pairs(targets) do
         local head = target:FindFirstChild("Head")
-        if head then
-            table.insert(targetParts, {target, head})
-        end
+        if head then table.insert(targetParts, {target, head}) end
     end
     return targetParts
 end
@@ -138,7 +160,6 @@ end
 function FastAttackModule.ExecuteFastAttack()
     local character = Plr.Character
     if not character then return end
-    
     local tool = character:FindFirstChildOfClass("Tool")
     if not tool then return end
     
@@ -161,7 +182,7 @@ function FastAttackModule.ExecuteFastAttack()
 end
 
 --========================================================================
--- 4. LOAD UI LIBRARY (FLUENT PLUS)
+-- 5. LOAD UI LIBRARY (FLUENT PLUS)
 --========================================================================
 local Fluent, SaveManager, InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua"))()
 
@@ -181,7 +202,7 @@ local Tabs = {
 }
 
 --========================================================================
--- 5. KẾT NỐI VÀO GIAO DIỆN (UI CONTROLS)
+-- 6. KẾT NỐI VÀO GIAO DIỆN (UI CONTROLS)
 --========================================================================
 
 -- [ TAB MAIN ]
@@ -197,21 +218,30 @@ Tabs.Main:AddButton({
     Callback = function()
         local team = TeamDropdown.Value
         if not Plr.Team or Plr.Team.Name ~= team then
-            pcall(function() 
-                ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer("SetTeam", team) 
-            end)
+            pcall(function() ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer("SetTeam", team) end)
             Fluent:Notify({ Title = "Nemo Hub", Content = "Đã đổi sang team " .. team, Duration = 3 })
         end
     end
 })
 
 -- [ TAB COMBAT ]
-local AutoAttackEnabled = false
+local AutoFarmLevelEnabled = false
 local BringMobsEnabled = false
+local FastAttackEnabled = false
+
+local AutoFarmToggle = Tabs.Combat:AddToggle("AutoFarmLevel", {
+    Title = "Auto Farm Level",
+    Description = "Tự động nhận nhiệm vụ & Đánh quái",
+    Default = false
+})
+
+AutoFarmToggle:OnChanged(function(Value)
+    AutoFarmLevelEnabled = Value
+end)
 
 local BringMobsToggle = Tabs.Combat:AddToggle("BringMobs", {
-    Title = "Enable Bring Mobs",
-    Description = "Gom quái cực mượt (Bone Hub Tech)",
+    Title = "Bring Mobs (Thủ công)",
+    Description = "Gom quái gần đó lại",
     Default = false
 })
 
@@ -220,36 +250,102 @@ BringMobsToggle:OnChanged(function(Value)
 end)
 
 local FastAttackToggle = Tabs.Combat:AddToggle("FastAttack", {
-    Title = "Enable Fast Attack",
-    Description = "Đánh nhanh không delay",
+    Title = "Fast Attack (Thủ công)",
+    Description = "Đánh siêu tốc",
     Default = false
 })
 
 FastAttackToggle:OnChanged(function(Value)
-    AutoAttackEnabled = Value
+    FastAttackEnabled = Value
 end)
 
--- VÒNG LẶP CHẠY NGẦM CÁC TÍNH NĂNG
+--========================================================================
+-- 7. VÒNG LẶP CHÍNH (MAIN LOOPS)
+--========================================================================
+
+-- Loop Đánh Nhanh
 RunService.Heartbeat:Connect(function()
-    if AutoAttackEnabled then
+    -- Bật Fast Attack bằng tay, HOẶC tự động bật khi đang Auto Farm
+    if FastAttackEnabled or AutoFarmLevelEnabled then
         FastAttackModule.ExecuteFastAttack()
     end
 end)
 
+-- Loop Auto Farm & Gom Quái
 task.spawn(function()
     while task.wait(0.1) do
-        if BringMobsEnabled then
-            ExecuteBringMobs()
+        if AutoFarmLevelEnabled then
+            local QuestData = GetQuestData()
+            
+            if QuestData then
+                local playerGui = Plr:FindFirstChild("PlayerGui")
+                
+                -- Hủy quest sai
+                if HasQuest() then
+                    local currentQuestText = playerGui.Main.Quest.Container.QuestTitle.Title.Text
+                    if not string.find(currentQuestText, QuestData.MobName) then
+                        ReplicatedStorage.Remotes.CommF_:InvokeServer("AbandonQuest")
+                        task.wait(0.5)
+                    end
+                end
+
+                -- Nhận quest
+                if not HasQuest() then
+                    TweenObject(Plr.Character.HumanoidRootPart, QuestData.NPCPos, 300)
+                    if (Plr.Character.HumanoidRootPart.Position - QuestData.NPCPos.Position).Magnitude < 10 then
+                        ReplicatedStorage.Remotes.CommF_:InvokeServer("StartQuest", QuestData.QuestName, QuestData.QuestNum)
+                    end
+                else
+                    -- Đi farm quái
+                    local character = Plr.Character
+                    if character and character:FindFirstChild("HumanoidRootPart") then
+                        
+                        -- Chống rơi
+                        if not character.HumanoidRootPart:FindFirstChild("AutoFarmVelocity") then
+                            local bv = Instance.new("BodyVelocity")
+                            bv.Name = "AutoFarmVelocity"
+                            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                            bv.Velocity = Vector3.new(0, 0, 0)
+                            bv.Parent = character.HumanoidRootPart
+                        end
+
+                        local targetMob = nil
+                        for _, v in pairs(Workspace.Enemies:GetChildren()) do
+                            if v.Name == QuestData.MobName and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then
+                                targetMob = v
+                                break
+                            end
+                        end
+
+                        if targetMob then
+                            local targetHRP = targetMob:FindFirstChild("HumanoidRootPart")
+                            if targetHRP then
+                                -- Bay lên đầu quái
+                                TweenObject(character.HumanoidRootPart, targetHRP.CFrame * CFrame.new(0, 15, 0), 300)
+                                -- Gom đúng loại quái nhiệm vụ
+                                ExecuteBringMobs(QuestData.MobName)
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            -- Tắt Auto Farm: Hủy BodyVelocity cho rớt xuống đất
+            if Plr.Character and Plr.Character:FindFirstChild("HumanoidRootPart") then
+                local bv = Plr.Character.HumanoidRootPart:FindFirstChild("AutoFarmVelocity")
+                if bv then bv:Destroy() end
+            end
+            
+            -- Chạy Gom Quái thủ công nếu được bật riêng
+            if BringMobsEnabled then
+                local enemies = Workspace.Enemies:GetChildren()
+                if #enemies > 0 then
+                    ExecuteBringMobs(enemies[1].Name) -- Gom đại con quái đầu tiên thấy
+                end
+            end
         end
     end
 end)
 
---========================================================================
--- 6. HOÀN TẤT LOAD UI
---========================================================================
 Window:SelectTab(1)
-Fluent:Notify({
-    Title = "Nemo Hub",
-    Content = "Hub đã load thành công! Đã tự chọn phe: " .. selectedTeam,
-    Duration = 5
-})
+Fluent:Notify({ Title = "Nemo Hub", Content = "Hub đã load thành công!", Duration = 5 })
