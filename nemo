@@ -1,16 +1,18 @@
 --========================================================================
--- [ NEMO HUB - BẢN CHÍNH (MANG ĐI MÃ HÓA) ]
+-- [ NEMO HUB - BẢN HOÀN CHỈNH KẾT HỢP BONE HUB TECH ]
 --========================================================================
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 local Plr = Players.LocalPlayer
 
 --========================================================================
 -- 0. ĐỌC CẤU HÌNH TỪ GETGENV() VÀ TỰ ĐỘNG CHỌN PHE
 --========================================================================
-local selectedTeam = "Marines" -- Mặc định nếu người dùng không nhập gì
+local selectedTeam = "Marines" 
 if getgenv().Config and getgenv().Config.Team then
     if getgenv().Config.Team == "Pirates" or getgenv().Config.Team == "Marines" then
         selectedTeam = getgenv().Config.Team
@@ -24,8 +26,6 @@ local function AutoJoinTeam()
         end)
     end
 end
-
--- Chạy ngay lập tức khi load script để vượt màn hình chọn phe
 AutoJoinTeam()
 
 --========================================================================
@@ -37,12 +37,74 @@ pcall(function()
 end)
 
 --========================================================================
--- 2. FAST ATTACK MODULE
+-- 2. TÍNH NĂNG GOM QUÁI (BRING MOBS V2 - TỪ BONE HUB)
+--========================================================================
+local function TweenObject(Object, Pos, Speed)
+    Speed = Speed or 300
+    if not Object or not Pos then return end
+    local Distance = (Pos.Position - Object.Position).Magnitude
+    local info = TweenInfo.new(Distance / Speed, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(Object, info, {CFrame = Pos})
+    tween:Play()
+end
+
+local function GetMobPosition(EnemiesName)
+    local pos = Vector3.zero
+    local count = 0
+    for _, v in pairs(Workspace.Enemies:GetChildren()) do
+        if v.Name == EnemiesName and v:FindFirstChild("HumanoidRootPart") then
+            pos += v.HumanoidRootPart.Position
+            count += 1
+        end
+    end
+    if count == 0 then return nil end
+    return pos / count
+end
+
+local function ExecuteBringMobs()
+    local enemies = Workspace.Enemies:GetChildren()
+    if #enemies == 0 then return end
+
+    local totalpos = {}
+    for _, v in pairs(enemies) do
+        if not totalpos[v.Name] then
+            totalpos[v.Name] = GetMobPosition(v.Name)
+        end
+    end
+
+    for _, v in pairs(Workspace.Enemies:GetChildren()) do
+        if v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart") then
+            local hrp = v.HumanoidRootPart
+            local humanoid = v.Humanoid
+            
+            if humanoid.Health > 0 and Plr.Character and Plr.Character:FindFirstChild("HumanoidRootPart") then
+                if (hrp.Position - Plr.Character.HumanoidRootPart.Position).Magnitude <= 350 then
+                    local mobPos = totalpos[v.Name]
+                    if mobPos then
+                        local TargetCFrame = CFrame.new(mobPos.X, mobPos.Y, mobPos.Z)
+                        local Distance = (hrp.Position - TargetCFrame.Position).Magnitude
+
+                        if Distance > 3 and Distance <= 280 then
+                            TweenObject(hrp, TargetCFrame, 300)
+                            hrp.CanCollide = false
+                            humanoid.WalkSpeed = 0
+                            humanoid.JumpPower = 0
+                            pcall(function()
+                                sethiddenproperty(Plr, "SimulationRadius", math.huge)
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+--========================================================================
+-- 3. FAST ATTACK MODULE (SECURE HIT)
 --========================================================================
 local FastAttackModule = {}
 FastAttackModule.Rate = 0.05 
-
--- (Lưu ý: Net thực tế của BF cần dùng getupvalue, đây là bản giả lập chống lỗi)
 local Net = {
     ["RE/RegisterAttack"] = ReplicatedStorage:FindFirstChild("RegisterAttack") or { FireServer = function() end },
     ["RE/RegisterHit"] = ReplicatedStorage:FindFirstChild("RegisterHit") or { FireServer = function() end }
@@ -50,7 +112,7 @@ local Net = {
 
 function FastAttackModule.GetAllTargets(character)
     local targets = {}
-    local enemies = workspace:FindFirstChild("Enemies")
+    local enemies = Workspace:FindFirstChild("Enemies")
     if enemies then
         for _, enemy in pairs(enemies:GetChildren()) do
             local humanoid = enemy:FindFirstChild("Humanoid")
@@ -99,13 +161,13 @@ function FastAttackModule.ExecuteFastAttack()
 end
 
 --========================================================================
--- 3. LOAD UI LIBRARY (FLUENT PLUS)
+-- 4. LOAD UI LIBRARY (FLUENT PLUS)
 --========================================================================
 local Fluent, SaveManager, InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua"))()
 
 local Window = Fluent:CreateWindow({
     Title = "Nemo Hub",
-    SubTitle = "Blox Fruits",
+    SubTitle = "Blox Fruits Premium",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true, 
@@ -114,13 +176,15 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
-    Main = Window:AddTab({ Title = "Main", Icon = "home" })
+    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
+    Combat = Window:AddTab({ Title = "Combat", Icon = "swords" })
 }
 
 --========================================================================
--- 4. KẾT NỐI VÀO GIAO DIỆN (UI CONTROLS)
+-- 5. KẾT NỐI VÀO GIAO DIỆN (UI CONTROLS)
 --========================================================================
--- Đồng bộ Dropdown với team người dùng đã chọn ở getgenv()
+
+-- [ TAB MAIN ]
 local TeamDropdown = Tabs.Main:AddDropdown("TeamSelect", {
     Title = "Select Team",
     Values = {"Marines", "Pirates"},
@@ -137,16 +201,27 @@ Tabs.Main:AddButton({
                 ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer("SetTeam", team) 
             end)
             Fluent:Notify({ Title = "Nemo Hub", Content = "Đã đổi sang team " .. team, Duration = 3 })
-        else
-            Fluent:Notify({ Title = "Nemo Hub", Content = "Bạn đã ở team " .. team .. " rồi!", Duration = 3 })
         end
     end
 })
 
--- Công tắc Fast Attack
+-- [ TAB COMBAT ]
 local AutoAttackEnabled = false
-local FastAttackToggle = Tabs.Main:AddToggle("FastAttack", {
+local BringMobsEnabled = false
+
+local BringMobsToggle = Tabs.Combat:AddToggle("BringMobs", {
+    Title = "Enable Bring Mobs",
+    Description = "Gom quái cực mượt (Bone Hub Tech)",
+    Default = false
+})
+
+BringMobsToggle:OnChanged(function(Value)
+    BringMobsEnabled = Value
+end)
+
+local FastAttackToggle = Tabs.Combat:AddToggle("FastAttack", {
     Title = "Enable Fast Attack",
+    Description = "Đánh nhanh không delay",
     Default = false
 })
 
@@ -154,15 +229,23 @@ FastAttackToggle:OnChanged(function(Value)
     AutoAttackEnabled = Value
 end)
 
--- Vòng lặp chạy ngầm Fast Attack
+-- VÒNG LẶP CHẠY NGẦM CÁC TÍNH NĂNG
 RunService.Heartbeat:Connect(function()
     if AutoAttackEnabled then
         FastAttackModule.ExecuteFastAttack()
     end
 end)
 
+task.spawn(function()
+    while task.wait(0.1) do
+        if BringMobsEnabled then
+            ExecuteBringMobs()
+        end
+    end
+end)
+
 --========================================================================
--- 5. HOÀN TẤT LOAD UI
+-- 6. HOÀN TẤT LOAD UI
 --========================================================================
 Window:SelectTab(1)
 Fluent:Notify({
