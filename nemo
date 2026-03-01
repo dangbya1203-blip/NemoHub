@@ -1,0 +1,172 @@
+--========================================================================
+-- [ NEMO HUB - BẢN CHÍNH (MANG ĐI MÃ HÓA) ]
+--========================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Plr = Players.LocalPlayer
+
+--========================================================================
+-- 0. ĐỌC CẤU HÌNH TỪ GETGENV() VÀ TỰ ĐỘNG CHỌN PHE
+--========================================================================
+local selectedTeam = "Marines" -- Mặc định nếu người dùng không nhập gì
+if getgenv().Config and getgenv().Config.Team then
+    if getgenv().Config.Team == "Pirates" or getgenv().Config.Team == "Marines" then
+        selectedTeam = getgenv().Config.Team
+    end
+end
+
+local function AutoJoinTeam()
+    if not Plr.Team or (Plr.Team.Name ~= "Marines" and Plr.Team.Name ~= "Pirates") then
+        pcall(function() 
+            ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer("SetTeam", selectedTeam) 
+        end)
+    end
+end
+
+-- Chạy ngay lập tức khi load script để vượt màn hình chọn phe
+AutoJoinTeam()
+
+--========================================================================
+-- 1. BYPASS EFFECTS (XÓA HIỆU ỨNG CHẾT/HỒI SINH)
+--========================================================================
+pcall(function()
+    hookfunction(require(ReplicatedStorage.Effect.Container.Death), function() end)
+    hookfunction(require(ReplicatedStorage.Effect.Container.Respawn), function() end)
+end)
+
+--========================================================================
+-- 2. FAST ATTACK MODULE
+--========================================================================
+local FastAttackModule = {}
+FastAttackModule.Rate = 0.05 
+
+-- (Lưu ý: Net thực tế của BF cần dùng getupvalue, đây là bản giả lập chống lỗi)
+local Net = {
+    ["RE/RegisterAttack"] = ReplicatedStorage:FindFirstChild("RegisterAttack") or { FireServer = function() end },
+    ["RE/RegisterHit"] = ReplicatedStorage:FindFirstChild("RegisterHit") or { FireServer = function() end }
+}
+
+function FastAttackModule.GetAllTargets(character)
+    local targets = {}
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, enemy in pairs(enemies:GetChildren()) do
+            local humanoid = enemy:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                table.insert(targets, enemy)
+            end
+        end
+    end
+    return targets
+end
+
+function FastAttackModule.GetTargetParts(targets)
+    local targetParts = {}
+    for _, target in pairs(targets) do
+        local head = target:FindFirstChild("Head")
+        if head then
+            table.insert(targetParts, {target, head})
+        end
+    end
+    return targetParts
+end
+
+function FastAttackModule.ExecuteFastAttack()
+    local character = Plr.Character
+    if not character then return end
+    
+    local tool = character:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    
+    local targets = FastAttackModule.GetAllTargets(character)
+    if #targets < 1 then return end
+    
+    local targetParts = FastAttackModule.GetTargetParts(targets)
+    if #targetParts < 1 then return end
+    
+    local attackRemote = Net["RE/RegisterAttack"]
+    local hitRemote = Net["RE/RegisterHit"]
+    
+    if attackRemote and hitRemote then
+        pcall(function()
+            attackRemote:FireServer(FastAttackModule.Rate)
+            local targetHead = targetParts[1][2]
+            hitRemote:FireServer(targetHead, targetParts)
+        end)
+    end
+end
+
+--========================================================================
+-- 3. LOAD UI LIBRARY (FLUENT PLUS)
+--========================================================================
+local Fluent, SaveManager, InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = "Nemo Hub",
+    SubTitle = "Blox Fruits",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true, 
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.RightControl
+})
+
+local Tabs = {
+    Main = Window:AddTab({ Title = "Main", Icon = "home" })
+}
+
+--========================================================================
+-- 4. KẾT NỐI VÀO GIAO DIỆN (UI CONTROLS)
+--========================================================================
+-- Đồng bộ Dropdown với team người dùng đã chọn ở getgenv()
+local TeamDropdown = Tabs.Main:AddDropdown("TeamSelect", {
+    Title = "Select Team",
+    Values = {"Marines", "Pirates"},
+    Multi = false,
+    Default = (selectedTeam == "Pirates") and 2 or 1, 
+})
+
+Tabs.Main:AddButton({
+    Title = "Join Selected Team",
+    Callback = function()
+        local team = TeamDropdown.Value
+        if not Plr.Team or Plr.Team.Name ~= team then
+            pcall(function() 
+                ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer("SetTeam", team) 
+            end)
+            Fluent:Notify({ Title = "Nemo Hub", Content = "Đã đổi sang team " .. team, Duration = 3 })
+        else
+            Fluent:Notify({ Title = "Nemo Hub", Content = "Bạn đã ở team " .. team .. " rồi!", Duration = 3 })
+        end
+    end
+})
+
+-- Công tắc Fast Attack
+local AutoAttackEnabled = false
+local FastAttackToggle = Tabs.Main:AddToggle("FastAttack", {
+    Title = "Enable Fast Attack",
+    Default = false
+})
+
+FastAttackToggle:OnChanged(function(Value)
+    AutoAttackEnabled = Value
+end)
+
+-- Vòng lặp chạy ngầm Fast Attack
+RunService.Heartbeat:Connect(function()
+    if AutoAttackEnabled then
+        FastAttackModule.ExecuteFastAttack()
+    end
+end)
+
+--========================================================================
+-- 5. HOÀN TẤT LOAD UI
+--========================================================================
+Window:SelectTab(1)
+Fluent:Notify({
+    Title = "Nemo Hub",
+    Content = "Hub đã load thành công! Đã tự chọn phe: " .. selectedTeam,
+    Duration = 5
+})
