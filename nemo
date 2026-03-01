@@ -333,21 +333,34 @@ function CombatModule.UseSkill(weaponTip, key)
     end)
 end
 
+-- Debounce chống Kick: giới hạn tốc độ fire remote, không để server flag spam
+local _attackDebounce   = false
+local _attackLastFire   = 0
+local _attackMinGap     = 0.08  -- (giây) khoảng cách tối thiểu giữa 2 lần fire
+
 function CombatModule.FastAttack()
+    if _attackDebounce then return end
+    local now = tick()
+    if now - _attackLastFire < _attackMinGap then return end
+    _attackDebounce  = true
+    _attackLastFire  = now
     pcall(function()
         local char = getChar()
-        if not char or not char:FindFirstChildOfClass("Tool") then return end
+        if not char or not char:FindFirstChildOfClass("Tool") then
+            _attackDebounce = false return
+        end
         local mobs = MobModule.GetAlive(nil)
-        if #mobs == 0 then return end
+        if #mobs == 0 then _attackDebounce = false return end
         local parts = {}
         for _, mob in ipairs(mobs) do
             local h = mob:FindFirstChild("Head")
             if h then table.insert(parts, {mob, h}) end
         end
-        if #parts == 0 then return end
+        if #parts == 0 then _attackDebounce = false return end
         Remote.RegisterAttack:FireServer(CFG.AttackRate)
         Remote.RegisterHit:FireServer(parts[1][2], parts)
     end)
+    _attackDebounce = false
 end
 
 --==============================================================================
@@ -629,23 +642,19 @@ end
 --==============================================================================
 -- SECTION 18: UI — FLUENT + SAVEMANAGER + INTERFACEMANAGER
 --==============================================================================
--- Load đúng cách: 3 return values
 local Fluent, SaveManager, InterfaceManager = loadstring(
     game:HttpGet("https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua")
 )()
 
--- Fallback nếu SaveManager/InterfaceManager không tồn tại trong bản này
-SaveManager      = SaveManager      or { SetLibrary = noop, IgnoreThemeSettings = noop, SetFolder = noop, BuildConfigSection = noop, LoadAutoloadConfig = noop }
-InterfaceManager = InterfaceManager or { SetLibrary = noop, SetFolder = noop, BuildInterfaceSection = noop }
+SaveManager      = SaveManager      or { SetLibrary=noop, IgnoreThemeSettings=noop, SetFolder=noop, BuildConfigSection=noop, LoadAutoloadConfig=noop }
+InterfaceManager = InterfaceManager or { SetLibrary=noop, SetFolder=noop, BuildInterfaceSection=noop }
 
--- Cấu hình SaveManager & InterfaceManager
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetFolder("NemoHub")
 InterfaceManager:SetFolder("NemoHub")
 
--- Lấy level an toàn
 local _ok, _lv = pcall(function() return Plr.Data.Level.Value end)
 local _lvStr    = tostring(_ok and _lv or "?")
 
@@ -660,55 +669,47 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
-    Main   = Window:AddTab({ Title = "Main",    Icon = "home" }),
-    Combat = Window:AddTab({ Title = "Combat",  Icon = "swords" }),
-    Player = Window:AddTab({ Title = "Player",  Icon = "user" }),
-    Misc   = Window:AddTab({ Title = "Misc",    Icon = "star" }),
-    Config = Window:AddTab({ Title = "Config",  Icon = "settings" }),
-    Saves  = Window:AddTab({ Title = "Saves",   Icon = "save" }),
+    Main   = Window:AddTab({ Title = "Main",   Icon = "home" }),
+    Combat = Window:AddTab({ Title = "Combat", Icon = "swords" }),
+    Player = Window:AddTab({ Title = "Player", Icon = "user" }),
+    Misc   = Window:AddTab({ Title = "Misc",   Icon = "star" }),
+    Config = Window:AddTab({ Title = "Config", Icon = "settings" }),
 }
 
 ---------------------------------------------------------------------------
--- TAB: MAIN — Team
+-- TAB: MAIN
 ---------------------------------------------------------------------------
-Tabs.Main:AddParagraph({
-    Title   = "World Detection",
-    Content = "Đang chạy tại: " .. seaLabel .. "  |  Level: " .. _lvStr
-})
-
 Tabs.Main:AddButton({
-    Title    = "Join Marines",
-    Description = "Vào phe Hải Quân",
-    Callback = function()
+    Title       = "Join Marines",
+    Description = seaLabel .. "  |  Lv " .. _lvStr .. "  —  Vào phe Hải Quân",
+    Callback    = function()
         TeamModule.Join("Marines")
-        Fluent:Notify({ Title="Team", Content="✅ Joined Marines", Duration=3 })
+        Fluent:Notify({ Title="Team", Content="Joined Marines", Duration=3 })
     end,
 })
 
 Tabs.Main:AddButton({
-    Title    = "Join Pirates",
+    Title       = "Join Pirates",
     Description = "Vào phe Cướp Biển",
-    Callback = function()
+    Callback    = function()
         TeamModule.Join("Pirates")
-        Fluent:Notify({ Title="Team", Content="✅ Joined Pirates", Duration=3 })
+        Fluent:Notify({ Title="Team", Content="Joined Pirates", Duration=3 })
     end,
 })
 
-Tabs.Main:AddDivider()
-
 Tabs.Main:AddButton({
-    Title    = "Rejoin Server",
+    Title       = "Rejoin Server",
     Description = "Thoát và vào lại server hiện tại",
-    Callback = function()
+    Callback    = function()
         pcall(function() TP_SVC:Teleport(game.PlaceId, Plr) end)
     end,
 })
 
 Tabs.Main:AddButton({
-    Title    = "Server Hop",
-    Description = "Tìm server < " .. CFG.HopMaxPlayers .. " người",
-    Callback = function()
-        Fluent:Notify({ Title="Server Hop", Content="🔍 Đang tìm...", Duration=3 })
+    Title       = "Server Hop",
+    Description = "Tìm server có ít hơn " .. CFG.HopMaxPlayers .. " người",
+    Callback    = function()
+        Fluent:Notify({ Title="Server Hop", Content="Đang tìm server...", Duration=3 })
         HopModule.Hop()
     end,
 })
@@ -716,102 +717,93 @@ Tabs.Main:AddButton({
 ---------------------------------------------------------------------------
 -- TAB: COMBAT
 ---------------------------------------------------------------------------
-local _fastEnabled  = false
-local _auraEnabled  = false
-local _aimbotEnabled= false
+local _fastEnabled   = false
+local _auraEnabled   = false
+local _aimbotEnabled = false
 
 Tabs.Combat:AddToggle("AutoFarm", {
     Title       = "Auto Farm Level",
-    Description = "Tự động nhận quest → tìm mob → farm (State Machine)",
+    Description = "Nhận quest → tìm mob → farm tự động (State Machine)",
     Default     = false,
 }):OnChanged(function(v)
     if v then AutoFarm.Start() else AutoFarm.Stop() end
 end)
 
-Tabs.Combat:AddDivider()
-
 Tabs.Combat:AddToggle("FastAttack", {
     Title       = "Fast Attack",
-    Description = "Bắn RegisterHit remote liên tục",
+    Description = "Bắn RegisterHit remote liên tục (có debounce chống kick)",
     Default     = false,
 }):OnChanged(function(v) _fastEnabled = v end)
 
 Tabs.Combat:AddToggle("KillAura", {
     Title       = "Kill Aura  (Centroid Bring)",
-    Description = "Hút quái về centroid + xóa Animator + lock",
+    Description = "Hút quái về centroid + xóa Animator + lock WalkSpeed",
     Default     = false,
 }):OnChanged(function(v) _auraEnabled = v end)
 
 Tabs.Combat:AddToggle("Aimbot", {
-    Title       = "Skill Aimbot  (__namecall)",
-    Description = "Inject vị trí mob vào mọi skill FireServer",
+    Title       = "Skill Aimbot  (__namecall hook)",
+    Description = "Tự động inject vị trí mob vào mọi skill FireServer",
     Default     = false,
 }):OnChanged(function(v)
     _aimbotEnabled = v
     if v then NamecallModule.Enable() else NamecallModule.Disable() end
 end)
 
-Tabs.Combat:AddDivider()
-
 Tabs.Combat:AddButton({
     Title    = "Use Skill Z",
-    Callback = function() CombatModule.UseSkill("Blox Fruit","Z") end,
+    Description = "Bấm Z với vũ khí Blox Fruit đang cầm",
+    Callback = function() CombatModule.UseSkill("Blox Fruit", "Z") end,
 })
+
 Tabs.Combat:AddButton({
     Title    = "Use Skill X",
-    Callback = function() CombatModule.UseSkill("Blox Fruit","X") end,
+    Description = "Bấm X với vũ khí Blox Fruit đang cầm",
+    Callback = function() CombatModule.UseSkill("Blox Fruit", "X") end,
 })
+
 Tabs.Combat:AddButton({
     Title    = "Use Skill C",
-    Callback = function() CombatModule.UseSkill("Blox Fruit","C") end,
+    Description = "Bấm C với vũ khí Blox Fruit đang cầm",
+    Callback = function() CombatModule.UseSkill("Blox Fruit", "C") end,
 })
 
 ---------------------------------------------------------------------------
 -- TAB: PLAYER
 ---------------------------------------------------------------------------
-Tabs.Player:AddParagraph({
-    Title   = "Auto Upgrade Stats",
-    Content = "Tự động phân điểm theo loại và số lượng đã chọn"
-})
-
-local _statTypeRef = { "Melee", "Defense", "Sword", "Gun", "Blox Fruit" }
-
 Tabs.Player:AddDropdown("StatType", {
-    Title   = "Loại Stats",
-    Values  = _statTypeRef,
+    Title   = "Loại Stats để nâng",
+    Values  = { "Melee", "Defense", "Sword", "Gun", "Blox Fruit" },
     Multi   = false,
     Default = 1,
-}):OnChanged(function(v)
-    StatModule.statType = v
-end)
+}):OnChanged(function(v) StatModule.statType = v end)
 
 Tabs.Player:AddSlider("StatAmount", {
-    Title    = "Số điểm mỗi lần",
+    Title    = "Số điểm mỗi lần nâng",
     Minimum  = 1, Maximum = 100, Default = 10,
     Callback = function(v) StatModule.amount = v end,
 })
 
 Tabs.Player:AddToggle("AutoStats", {
-    Title   = "Auto Upgrade Stats",
-    Default = false,
+    Title       = "Auto Upgrade Stats",
+    Description = "Tự động phân điểm liên tục",
+    Default     = false,
 }):OnChanged(function(v) StatModule.enabled = v end)
 
-Tabs.Player:AddDivider()
-
 Tabs.Player:AddButton({
-    Title    = "Change Buso Haki State 0",
-    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage",0) end) end,
-})
-Tabs.Player:AddButton({
-    Title    = "Change Buso Haki State 3",
-    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage",3) end) end,
-})
-Tabs.Player:AddButton({
-    Title    = "Change Buso Haki State 5",
-    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage",5) end) end,
+    Title    = "Buso Haki State 0  (tắt)",
+    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage", 0) end) end,
 })
 
-Tabs.Player:AddDivider()
+Tabs.Player:AddButton({
+    Title    = "Buso Haki State 3",
+    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage", 3) end) end,
+})
+
+Tabs.Player:AddButton({
+    Title    = "Buso Haki State 5  (max)",
+    Callback = function() pcall(function() Remote.CommF:InvokeServer("ChangeBusoStage", 5) end) end,
+})
 
 Tabs.Player:AddButton({
     Title    = "Open Devil Fruit Shop",
@@ -839,16 +831,14 @@ Tabs.Player:AddButton({
 Tabs.Player:AddButton({
     Title    = "Open Awakening Menu",
     Callback = function()
-        pcall(function()
-            Plr.PlayerGui.Main.AwakeningToggler.Visible = true
-        end)
+        pcall(function() Plr.PlayerGui.Main.AwakeningToggler.Visible = true end)
     end,
 })
 
 Tabs.Player:AddButton({
-    Title    = "Collect Nearby Fruits",
+    Title       = "Collect Nearby Fruits",
     Description = "Kéo tất cả Devil Fruit trong workspace về người",
-    Callback = function()
+    Callback    = function()
         pcall(function()
             local hrp = getHRP()
             if not hrp then return end
@@ -859,7 +849,7 @@ Tabs.Player:AddButton({
                 end
             end
         end)
-        Fluent:Notify({ Title="Collect", Content="✅ Kéo fruits về!", Duration=3 })
+        Fluent:Notify({ Title="Collect", Content="Kéo fruits về xong!", Duration=3 })
     end,
 })
 
@@ -868,40 +858,32 @@ Tabs.Player:AddButton({
 ---------------------------------------------------------------------------
 Tabs.Misc:AddButton({
     Title       = "FPS Booster",
-    Description = "6-layer: Rendering + Water + Lighting + Quality + Effects + GC×2",
+    Description = "6-layer: Rendering / Water / Lighting / Quality / Effects / GC×2",
     Callback    = function()
         FPSModule.Boost()
-        Fluent:Notify({ Title="FPS Booster", Content="✅ Đã tối ưu!", Duration=4 })
+        Fluent:Notify({ Title="FPS Booster", Content="Đã tối ưu đồ hoạ!", Duration=4 })
     end,
 })
 
-Tabs.Misc:AddDivider()
-
 Tabs.Misc:AddButton({
     Title    = "Remove Rocks",
+    Description = "Xóa chướng ngại vật Rocks trong Workspace",
     Callback = function()
         pcall(function()
             local r = WS:FindFirstChild("Rocks")
             if r then r:Destroy() end
         end)
-        Fluent:Notify({ Title="Clean", Content="✅ Đã xóa Rocks", Duration=3 })
+        Fluent:Notify({ Title="Clean", Content="Đã xóa Rocks", Duration=3 })
     end,
 })
 
 Tabs.Misc:AddButton({
-    Title    = "Apply Bypass",
-    Description = "Hook Death/Respawn effect (chạy tự động lúc load)",
-    Callback = function()
+    Title       = "Apply Bypass",
+    Description = "Re-hook Death/Respawn effect (tự chạy lúc load)",
+    Callback    = function()
         BypassModule.Apply()
-        Fluent:Notify({ Title="Bypass", Content="✅ Applied", Duration=3 })
+        Fluent:Notify({ Title="Bypass", Content="Applied!", Duration=3 })
     end,
-})
-
-Tabs.Misc:AddDivider()
-
-Tabs.Misc:AddParagraph({
-    Title   = "Inventory Info",
-    Content = "Mở console để xem — dùng GetM / GetIn từ Inventory module"
 })
 
 ---------------------------------------------------------------------------
@@ -925,27 +907,24 @@ Tabs.Config:AddSlider("AttackRate", {
     Callback = function(v) CFG.AttackRate = v / 100 end,
 })
 
+Tabs.Config:AddSlider("AttackGap", {
+    Title    = "Debounce Gap (×0.01s)  — chống kick",
+    Minimum  = 1, Maximum = 50, Default = 8,
+    Callback = function(v) _attackMinGap = v / 100 end,
+})
+
 Tabs.Config:AddSlider("HopPlayers", {
-    Title    = "Hop: max player per server",
+    Title    = "Server Hop: max players",
     Minimum  = 2, Maximum = 50, Default = CFG.HopMaxPlayers,
     Callback = function(v) CFG.HopMaxPlayers = v end,
 })
 
-Tabs.Config:AddDivider()
-
 Tabs.Config:AddKeybind("ToggleUI", {
-    Title   = "Toggle UI Key",
-    Mode    = "Toggle",
-    Default = "RightControl",
+    Title    = "Toggle UI Key",
+    Mode     = "Toggle",
+    Default  = "RightControl",
     Callback = function() Window:ToggleMinimize() end,
 })
-
----------------------------------------------------------------------------
--- TAB: SAVES  (SaveManager + InterfaceManager)
----------------------------------------------------------------------------
--- Build section cài đặt theme vào tab Saves
-InterfaceManager:BuildInterfaceSection(Tabs.Saves)
-SaveManager:BuildConfigSection(Tabs.Saves)
 
 --==============================================================================
 -- SECTION 19: MAIN LOOPS
