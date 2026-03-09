@@ -98,41 +98,49 @@ task.spawn(function()
 end)
 
 local Net, RegisterAttack, RegisterHit, hitRemote, hitRemoteId
+-- FastAttack class pattern: direct WaitForChild + CombatFlags + HitFunction
+local CombatFlags, HitFunction, ShootFunction
+-- HNC require pattern (fallback)
+local HNCHit, HNCAtk
 task.spawn(function()
-    local Modules = RS:WaitForChild("Modules", 5)
-    Net = Modules and Modules:WaitForChild("Net", 5)
-    if Net then
-        RegisterAttack = Net["RE/RegisterAttack"]
-        RegisterHit    = Net["RE/RegisterHit"]
-    end
-    local remFolder = RS:WaitForChild("Remotes", 5)
-    if remFolder then
-        local function hookDmg(child)
-            if child.Name == "DMGDEBUG" then
-                child.OnClientEvent:Connect(function() end)
+    pcall(function()
+        local Modules = RS:WaitForChild("Modules", 5)
+        if not Modules then return end
+        local NetDir = Modules:WaitForChild("Net", 5)
+        RegisterAttack = NetDir:WaitForChild("RE/RegisterAttack", 5)
+        RegisterHit    = NetDir:WaitForChild("RE/RegisterHit", 5)
+        -- HNC require path (fallback)
+        pcall(function()
+            local NetMod = require(NetDir)
+            if NetMod then
+                HNCHit = NetMod:RemoteEvent("RegisterHit", true)
+                HNCAtk = NetDir["RE/RegisterAttack"]
             end
-        end
-        local dmg = remFolder:FindFirstChild("DMGDEBUG")
-        if dmg then hookDmg(dmg) else remFolder.ChildAdded:Connect(hookDmg) end
-        for _, folder in ipairs({
-            RS:FindFirstChild("Util"), RS:FindFirstChild("Common"),
-            remFolder, RS:FindFirstChild("Assets"), RS:FindFirstChild("FX")
-        }) do
-            if folder then
-                for _, child in ipairs(folder:GetChildren()) do
-                    if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
-                        hitRemote = child; hitRemoteId = child:GetAttribute("Id")
-                    end
-                end
-                folder.ChildAdded:Connect(function(child)
-                    if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
-                        hitRemote = child; hitRemoteId = child:GetAttribute("Id")
-                    end
-                end)
+        end)
+        -- CombatFlags + HitFunction (leaked source pattern)
+        -- Chỉ dùng khi COMBAT_REMOTE_THREAD = true VÀ getsenv available
+        pcall(function()
+            local successFlags, combatRemoteThread = pcall(function()
+                return require(Modules.Flags).COMBAT_REMOTE_THREAD or false
+            end)
+            if successFlags and combatRemoteThread then
+                CombatFlags = combatRemoteThread
             end
-        end
-    end
+        end)
+        pcall(function()
+            if not getsenv then return end
+            local playerScripts = game.Players.LocalPlayer:WaitForChild("PlayerScripts", 5)
+            if not playerScripts then return end
+            local localScript = playerScripts:FindFirstChildOfClass("LocalScript")
+            if not localScript then return end
+            local success, scriptEnv = pcall(getsenv, localScript)
+            if success and scriptEnv and scriptEnv._G then
+                HitFunction = scriptEnv._G.SendHitsToServer
+            end
+        end)
+    end)
 end)
+-- (duplicate Net setup removed — dùng WaitForChild setup ở trên)
 
 local Pos = CFrame.new(0, 35, 0)
 
@@ -238,23 +246,28 @@ do
                 local sky = Lighting:FindFirstChildOfClass("Sky")
                 MoonPara:SetDesc(sky and (MOON_LABELS[sky.MoonTextureId] or "Bad Moon | 0/5") or "Bad Moon | 0/5")
 
-                pcall(function()
-                    if CommF then
-                        local response = tostring(CommF:InvokeServer("CakePrinceSpawner", true) or "")
-                        local left = string.match(response, "%d+")
-                        if left then
-                            local needed = tonumber(left)
-                            local kills  = math.max(0, 500 - needed)
-                            DimKillPara:SetDesc(string.format("%d / 500 — Cần thêm %d lần", kills, needed))
-                        elseif response ~= "" then
-                            DimKillPara:SetDesc("🟢 500 / 500 — Cổng Đã Mở!")
+                -- Chỉ query CakePrinceSpawner ở World3 (Kata island)
+                if World3 then
+                    pcall(function()
+                        if CommF then
+                            local response = tostring(CommF:InvokeServer("CakePrinceSpawner") or "")
+                            local left = string.match(response, "%d+")
+                            if left then
+                                local needed = tonumber(left)
+                                local kills  = math.max(0, 500 - needed)
+                                DimKillPara:SetDesc(string.format("%d / 500 — Cần thêm %d lần", kills, needed))
+                            elseif response ~= "" then
+                                DimKillPara:SetDesc("🟢 500 / 500 — Cổng Đã Mở!")
+                            else
+                                DimKillPara:SetDesc("N/A (Sea 1 / Sea 2)")
+                            end
                         else
-                            DimKillPara:SetDesc("Đang chờ Server...")
+                            DimKillPara:SetDesc("Đang tải dữ liệu...")
                         end
-                    else
-                        DimKillPara:SetDesc("Đang tải dữ liệu...")
-                    end
-                end)
+                    end)
+                else
+                    DimKillPara:SetDesc("N/A — Chỉ có ở Sea 3")
+                end
 
                 local wkEn = workspace:FindFirstChild("Enemies")
                 local eliteSpawned = RS:FindFirstChild("Diablo") or RS:FindFirstChild("Deandre") or RS:FindFirstChild("Urban")
@@ -360,9 +373,10 @@ do
     _G.IgnoreMobs        = _G.IgnoreMobs        or {}
     _G.SelectedWeaponName = _G.SelectedWeaponName or nil  -- set by backpack scanner; nil-safe via EquipWeapon guard
     local function isAlive(model)
+        if not model or not model.Parent then return false end
         if _G.IgnoreMobs[model] then return false end
-        local hum = model and model:FindFirstChild("Humanoid")
-        return hum and hum.Health > 0
+        local hum = model:FindFirstChild("Humanoid")
+        return hum ~= nil and hum.Health > 0
     end
 
     local function EquipWeapon(toolName)
@@ -379,8 +393,13 @@ do
     local function AutoHaki()
         local now = tick()
         if now - _lastHakiTime < 2 then return end
+        local char = Player.Character
+        if not char then return end
+        -- HasBuso = IntValue, Value > 0 khi haki đang active
+        local hasBuso = char:FindFirstChild("HasBuso")
+        if hasBuso and hasBuso.Value > 0 then return end
         pcall(function()
-            if CommF and not Player.Character:FindFirstChild("HasBuso") then
+            if CommF then
                 CommF:InvokeServer("Buso")
                 _lastHakiTime = now
             end
@@ -504,6 +523,9 @@ do
         if hum then hum.Died:Connect(stopPartTele) end
     end
 
+    -- [OPT-3] TweenPlayer Anti-Ban: di chuyển theo đường cong + random offset
+    -- Tránh path thẳng tắp cố định dễ bị hệ thống anti-cheat phát hiện
+    local _rng = Random.new()
     local function TweenPlayer(pos)
         pcall(function()
             local char = Player.Character
@@ -516,14 +538,18 @@ do
             local tweenDone = not _activeTween
                 or _activeTween.PlaybackState ~= Enum.PlaybackState.Playing
             if not destChanged and not tweenDone then return end
-            -- Cancel tween cũ
             if _activeTween and _activeTween.PlaybackState == Enum.PlaybackState.Playing then
                 _activeTween:Cancel()
             end
             _lastTweenDest = pos.Position
 
-            -- PartTele pattern từ Tiroreal: tween 1 Part CanCollide=true
-            -- HRP follow theo → không xuyên tường/kẹt địa hình
+            -- [ANTI-BAN] Tính điểm đích có random offset nhỏ (±8 studs XZ, ±3 Y)
+            local offsetX = _rng:NextNumber(-8, 8)
+            local offsetZ = _rng:NextNumber(-8, 8)
+            local offsetY = _rng:NextNumber(-3, 3)
+            local destPos  = pos.Position + Vector3.new(offsetX, offsetY, offsetZ)
+            local destCF   = CFrame.new(destPos) * (pos - pos.Position)  -- giữ rotation
+
             stopPartTele()
             local partTele = Instance.new("Part")
             partTele.Name        = "PartTele"
@@ -546,8 +572,23 @@ do
 
             _isTeleporting = true
             local speed = getEffectiveTweenSpeed()
-            local info  = TweenInfo.new(dist / speed, Enum.EasingStyle.Linear)
-            _activeTween = TweenService:Create(partTele, info, {CFrame = pos})
+
+            -- [ANTI-BAN] Chọn ngẫu nhiên giữa Quad (curved) và Linear để path không đều
+            local styleChoice = _rng:NextInteger(1, 3)
+            local easingStyle
+            if styleChoice == 1 then
+                easingStyle = Enum.EasingStyle.Quad
+            elseif styleChoice == 2 then
+                easingStyle = Enum.EasingStyle.Sine
+            else
+                easingStyle = Enum.EasingStyle.Linear
+            end
+            -- Thêm độ trễ ngẫu nhiên nhỏ (0–0.15s) trước khi tween để không đều đặn
+            local jitter = _rng:NextNumber(0, 0.15)
+            if jitter > 0.05 then task.wait(jitter) end
+
+            local info = TweenInfo.new(dist / speed, easingStyle, Enum.EasingDirection.Out)
+            _activeTween = TweenService:Create(partTele, info, {CFrame = destCF})
             _activeTween:Play()
             _activeTween.Completed:Connect(function(state)
                 if state == Enum.PlaybackState.Completed then
@@ -600,11 +641,20 @@ do
     end
 
     local function waitForRespawn()
+        -- Thử dùng CharacterAdded event để phát hiện respawn ngay lập tức
+        local done = false
+        local conn = Player.CharacterAdded:Connect(function() done = true end)
+        -- Fallback: poll mỗi 0.3s, tối đa 12s
         local t = tick()
-        repeat task.wait(0.5) until tick() - t > 10
-            or (Player.Character
-                and Player.Character:FindFirstChildOfClass("Humanoid")
-                and Player.Character:FindFirstChildOfClass("Humanoid").Health > 0)
+        repeat
+            task.wait(0.3)
+            local char = Player.Character
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then done = true end
+        until done or tick() - t > 12
+        pcall(function() conn:Disconnect() end)
+        -- Đợi thêm 0.5s để character load đầy đủ
+        task.wait(0.5)
     end
 
     local function StopTween(state)
@@ -671,6 +721,7 @@ do
         local targetCF = CFrame.new(initHRP.Position) * Pos
         NavigateTo(targetCF, nil, mob.Name)
         pcall(function() VIM_SVC:CaptureController() end)
+        EquipWeapon(_G.SelectedWeaponName)  -- equip 1 lần trước loop
 
         repeat
             RunService.Heartbeat:Wait()
@@ -709,7 +760,6 @@ do
                 break
             end
 
-            EquipWeapon(_G.SelectedWeaponName)
             AutoHaki()
             if mobHum.WalkSpeed ~= 0 then mobHum.WalkSpeed = 0 end
             if mobHum.JumpPower ~= 0 then mobHum.JumpPower = 0 end
@@ -718,10 +768,11 @@ do
             if mobHead then mobHead.CanCollide = false end
             PosMon  = mobHRP.CFrame
             MonFarm = mob.Name
-            pcall(function() hrpNow.CFrame = mobHRP.CFrame * Pos end)
-            pcall(function()
-                VIM_SVC:Button1Down(Vector2.new(1280, 672), workspace.CurrentCamera.CFrame)
-            end)
+            -- Update targetCF theo vị trí mob hiện tại (boss có thể teleport/kite)
+            local currentTargetCF = mobHRP.CFrame * Pos
+            pcall(function() hrpNow.CFrame = currentTargetCF end)
+            -- Fire attack trực tiếp thêm 1 lần (Heartbeat đã fire 1 lần, cộng lại = 2x/frame)
+            pcall(executeFastAttack)
             attackCount = attackCount + 1
         until not isEnabledFn() or mobDied
             or not mob.Parent
@@ -730,19 +781,45 @@ do
         pcall(function() diedConn:Disconnect() end)
     end
 
-    -- ── BACKGROUND SYSTEMS ──────────────────────────────────────────
+    -- [OPT-6] CLEANUP nâng cao: dọn nhiều loại rác hơn, tránh tụt FPS khi treo qua đêm
+    local CLEANUP_NAMES = {
+        "DamageCounter", "Lightning", "BloodEffect", "BloodParticle",
+        "HitEffect", "SkillEffect", "Explosion", "DmgPart",
+        "HitParticle", "DamagePart", "EffectPart",
+    }
     task.spawn(function()
         while task.wait(15) do
             pcall(function()
-                local dc = workspace:FindFirstChild("DamageCounter")
-                while dc do dc:Destroy(); dc = workspace:FindFirstChild("DamageCounter") end
-                local lt = workspace:FindFirstChild("Lightning")
-                while lt do lt:Destroy(); lt = workspace:FindFirstChild("Lightning") end
+                -- Dọn hiệu ứng trong workspace
+                for _, cleanName in ipairs(CLEANUP_NAMES) do
+                    local obj = workspace:FindFirstChild(cleanName)
+                    while obj do
+                        obj:Destroy()
+                        obj = workspace:FindFirstChild(cleanName)
+                    end
+                end
+                -- Dọn particle trong character (hiệu ứng trái cây tích tụ)
+                local char = Player.Character
+                if char then
+                    for _, desc in ipairs(char:GetDescendants()) do
+                        if desc:IsA("ParticleEmitter") or desc:IsA("PointLight") then
+                            pcall(function()
+                                if desc.Parent and not desc.Parent:IsA("Tool") then
+                                    desc:Destroy()
+                                end
+                            end)
+                        end
+                    end
+                end
+                -- Dọn IgnoreMobs stale entries
+                local now = tick()
                 for mob, t in pairs(_G.IgnoreMobs) do
-                    if not mob.Parent or (type(t) == "number" and tick() - t > 15) then
+                    if not mob.Parent or (type(t) == "number" and now - t > 15) then
                         _G.IgnoreMobs[mob] = nil
                     end
                 end
+                -- Force GC hint (chỉ hoạt động trong executor môi trường)
+                pcall(function() gcinfo() end)
             end)
         end
     end)
@@ -991,23 +1068,29 @@ do
         end)
     end
 
-    -- ── FAST ATTACK ──────────────────────────────────────────────────
-    local CachedSeed = 0
-    task.spawn(function()
-        while task.wait(2) do
-            pcall(function()
-                if Net and Net.seed then
-                    CachedSeed = Net.seed:InvokeServer() or 0
+    -- [OPT-5] executeFastAttack: cache kết quả kiểm tra mob theo frame
+    -- Tránh gọi Remote liên tục khi không có quái trong tầm (lag mạng + dễ bị kick)
+    local _lastAttackTick = 0
+    local _ATTACK_COOLDOWN = 0.05  -- tối thiểu 50ms giữa các lần fire
+
+    local function hasMobInRange(rootPos, range)
+        range = range or 65
+        for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
+            if folder then
+                for _, enemy in ipairs(folder:GetChildren()) do
+                    local eHRP = enemy:FindFirstChild("HumanoidRootPart")
+                    if eHRP and isAlive(enemy)
+                    and not enemy:GetAttribute("IsBoat")
+                    and (eHRP.Position - rootPos).Magnitude <= range then
+                        return true
+                    end
                 end
-            end)
+            end
         end
-    end)
+        return false
+    end
 
-    local _targets = {}
-    local _pool    = {}
-    local _poolSize = 300
-    for i = 1, _poolSize do _pool[i] = {nil, nil} end
-
+    -- ── FAST ATTACK ──────────────────────────────────────────────────
     local function executeFastAttack(toolTipFilter)
         local char = Player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -1018,70 +1101,90 @@ do
         if toolTipFilter then
             if tip ~= toolTipFilter then return end
         else
-            if tip ~= "Melee" and tip ~= "Sword" then return end
+            if tip ~= "Melee" and tip ~= "Sword" and tip ~= "Blox Fruit" then return end
         end
-        -- ── LeftClickRemote path (Ten Hub pattern) ──────────────────
-        if tool:FindFirstChild("LeftClickRemote") then
-            local attackCount = 1
-            local playerPos   = root.Position
-            local enemies     = workspace:FindFirstChild("Enemies")
-            if enemies then
-                for _, enemy in ipairs(enemies:GetChildren()) do
-                    local eHRP = enemy:FindFirstChild("HumanoidRootPart")
-                    if eHRP and isAlive(enemy) and (eHRP.Position - playerPos).Magnitude <= 60 then
-                        pcall(function()
-                            local direction = (eHRP.Position - playerPos).Unit
-                            tool.LeftClickRemote:FireServer(direction, attackCount)
-                        end)
-                        attackCount = attackCount + 1
-                        if attackCount > 1e13 then attackCount = 1 end
-                    end
-                end
-            end
+
+        -- [OPT-5] Throttle: không fire quá nhanh
+        local now = tick()
+        if now - _lastAttackTick < _ATTACK_COOLDOWN then return end
+
+        local rootPos = root.Position
+
+        -- [OPT-5] Kiểm tra có mob trong tầm không trước khi fire Remote
+        if not hasMobInRange(rootPos, 65) then return end
+        _lastAttackTick = now
+
+        -- ── PATH 1: LeftClickRemote (Blox Fruit M1) ──────────────────
+        if tip == "Blox Fruit" and tool:FindFirstChild("LeftClickRemote") then
+            local lcr = tool.LeftClickRemote
+            pcall(function()
+                lcr:FireServer(Vector3.new(0.01, -500, 0.01), 1, true)
+                lcr:FireServer(false)
+            end)
             return
         end
-        -- ── RegisterAttack / RegisterHit fallback ───────────────────
-        if not RegisterAttack or not RegisterHit then return end
-        local count = 0
-        local firstHead = nil
+
+        -- Gom targets
+        local LIMBS = {"RightLowerArm","RightUpperArm","LeftLowerArm","LeftUpperArm","RightHand","LeftHand"}
+        local mainTarget = nil
+        local targets    = {}
+
         for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
             if folder then
                 for _, mob in ipairs(folder:GetChildren()) do
-                    if mob ~= char then
+                    if mob ~= char and isAlive(mob) and not mob:GetAttribute("IsBoat") then
                         local hrp  = mob:FindFirstChild("HumanoidRootPart")
                         local head = mob:FindFirstChild("Head")
-                        if hrp and head and isAlive(mob) and (hrp.Position - root.Position).Magnitude <= 100 then
-                            if not firstHead then firstHead = head end
-                            for _, part in ipairs(mob:GetChildren()) do
-                                if part:IsA("BasePart") then
-                                    count = count + 1
-                                    local entry = _pool[count]
-                                    if not entry then entry = {nil, nil}; _pool[count] = entry end
-                                    entry[1] = mob; entry[2] = part
-                                end
-                            end
+                        if hrp and head and (hrp.Position - rootPos).Magnitude <= 65 then
+                            if not mainTarget then mainTarget = head end
+                            local hitPart = mob:FindFirstChild(LIMBS[math.random(#LIMBS)]) or hrp
+                            table.insert(targets, {mob, hitPart})
                         end
                     end
                 end
             end
         end
-        if count == 0 or not firstHead then return end
-        table.clear(_targets)
-        for i = 1, count do _targets[i] = _pool[i] end
-        pcall(function()
-            RegisterAttack:FireServer(0.0000000000001)
-            RegisterHit:FireServer(firstHead, _targets)
-            if hitRemote and hitRemoteId and CachedSeed ~= 0 then
-                local enc = string.gsub("RE/RegisterHit", ".", function(c)
-                    return string.char(bit32.bxor(string.byte(c), math.floor(workspace:GetServerTimeNow()/10%10)+1))
-                end)
-                cloneref(hitRemote):FireServer(enc, bit32.bxor(hitRemoteId+909090, CachedSeed*2), firstHead, _targets)
-            end
-        end)
-    end
 
+        if not mainTarget or #targets == 0 then return end
+
+        -- ── PATH 2: CombatFlags + HitFunction (internal getsenv path) ──
+        -- Chỉ dùng khi COMBAT_REMOTE_THREAD = true VÀ HitFunction tồn tại
+        if CombatFlags and HitFunction then
+            pcall(function()
+                RegisterAttack:FireServer(0)
+                HitFunction(mainTarget, targets)
+            end)
+            return
+        end
+
+        -- ── PATH 3: Direct hitEvent (khi COMBAT_REMOTE_THREAD = false) ──
+        -- Leaked source: successFlags and not combatRemoteThread → hitEvent:FireServer trực tiếp
+        -- Đây là path chính cho hầu hết server
+        if RegisterAttack and RegisterHit then
+            pcall(function()
+                RegisterAttack:FireServer(0)
+                RegisterHit:FireServer(mainTarget, targets)
+            end)
+            return
+        end
+
+        -- ── PATH 4: HNC require pattern (fallback) ───────────────────
+        if HNCHit and HNCAtk then
+            local id = tostring(Player.UserId):sub(2,4) .. tostring(coroutine.running()):sub(11,15)
+            pcall(function() HNCAtk:FireServer() end)
+            pcall(function() HNCHit:FireServer(mainTarget, targets, nil, nil, id) end)
+        end
+    end
     local function Attack()
-        if _G_FastAttack then pcall(executeFastAttack) end
+        if _G_FastAttack then
+            pcall(executeFastAttack)
+            -- Boss có nhiều HP: fire thêm 2 lần nữa trong cùng frame
+            if _G.AutoFarmBoss or _G.AutoFarmAllBoss
+            or (_G.AutoFarm and (_G.SpecialFarmMode == "Katakuri")) then
+                pcall(executeFastAttack)
+                pcall(executeFastAttack)
+            end
+        end
     end
     local function AttackMastery(toolTip)
         pcall(executeFastAttack, toolTip)
@@ -1090,7 +1193,36 @@ do
     RunService.Heartbeat:Connect(function()
         if _G.AutoFarmLevel or _G.AutoFarmMon or _G.AutoFarmBoss or _G.AutoFarmAllBoss
         or _G.AutoFarm then
-            Attack()
+            -- [OPT-5] Chỉ Attack khi có quái thực sự trong tầm, tránh spam Remote
+            local char2 = Player.Character
+            local hrp2  = char2 and char2:FindFirstChild("HumanoidRootPart")
+            if hrp2 and hasMobInRange(hrp2.Position, 65) then
+                Attack()
+            end
+            -- Anti-CC: xóa stun/busy/ragdoll của player để boss không khống chế được
+            pcall(function()
+                local char = Player.Character
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not hum or hum.Health <= 0 then return end
+                local Stun = char:FindFirstChild("Stun")
+                local Busy = char:FindFirstChild("Busy")
+                if Stun and Stun.Value ~= 0 then Stun.Value = 0 end
+                if Busy and Busy.Value then Busy.Value = false end
+                if hum:GetState() == Enum.HumanoidStateType.Ragdoll
+                or hum:GetState() == Enum.HumanoidStateType.FallingDown then
+                    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end
+                if hum.PlatformStand then hum.PlatformStand = false end
+                if hum.Sit then hum.Sit = false end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local vel = hrp.AssemblyLinearVelocity
+                    if vel.Magnitude > 50 then
+                        hrp.AssemblyLinearVelocity  = Vector3.zero
+                        hrp.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end)
         end
     end)
 
@@ -1112,8 +1244,28 @@ do
                             local hum = mob:FindFirstChild("Humanoid")
                             if hrp and hum then
                                 local dist = (hrp.Position - PosMon.Position).Magnitude
+                                -- [OPT-4] Chỉ kéo mob khi: trong BRING_RANGE VÀ
+                                -- cách player > 3 studs (tránh giật liên tục khi đã sát)
+                                -- Dùng setprimarypartcframe để dịch chuyển toàn bộ rig,
+                                -- tránh mob bị "văng" hoặc mất AI
                                 if dist <= BRING_RANGE and dist > 3 then
-                                    hrp.CFrame     = PosMon
+                                    -- Kiểm tra an toàn: tính target CF offset 2 studs từ player
+                                    local myHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+                                    local safeTarget = PosMon
+                                    if myHRP then
+                                        local toMob = (PosMon.Position - myHRP.Position)
+                                        if toMob.Magnitude > 0.1 then
+                                            -- Đặt mob cách player 5 studs về hướng của PosMon
+                                            local dir = toMob.Unit
+                                            safeTarget = CFrame.new(myHRP.Position + dir * 5)
+                                        end
+                                    end
+                                    -- Dùng setprimarypartcframe nếu mob có PrimaryPart, fallback hrp.CFrame
+                                    if mob.PrimaryPart then
+                                        pcall(function() mob:SetPrimaryPartCFrame(safeTarget) end)
+                                    else
+                                        hrp.CFrame = safeTarget
+                                    end
                                     hrp.CanCollide = false
                                     local head = mob:FindFirstChild("Head")
                                     if head then head.CanCollide = false end
@@ -1129,7 +1281,53 @@ do
         end
     end)
 
+    -- ══════════════════════════════════════════════════════════════════
+    -- [OPT-1] SMART QUEST CHECK: Đọc Player.Data.Quest thay vì GUI
+    -- Ưu tiên: Data.Quest.Value (server-authoritative) → fallback GUI
+    -- ══════════════════════════════════════════════════════════════════
+    local _cachedQuestData = { value = nil, mobName = nil, progress = 0, goal = 0, ts = 0 }
+
+    local function readQuestFromData()
+        local ok, result = pcall(function()
+            local data  = Player:WaitForChild("Data", 0.5)
+            if not data then return nil, nil, 0, 0 end
+            local qFolder = data:FindFirstChild("Quest")
+            if not qFolder then return nil, nil, 0, 0 end
+            -- Value chứa tên quest string (e.g. "FishmanQuest")
+            local qVal    = qFolder:FindFirstChild("Value")
+            local qKill   = qFolder:FindFirstChild("Kills") or qFolder:FindFirstChild("Progress")
+            local qGoal   = qFolder:FindFirstChild("Goal")  or qFolder:FindFirstChild("Required")
+            local questName = qVal  and tostring(qVal.Value)  or nil
+            local progress  = qKill and (qKill.Value or 0)    or 0
+            local goal      = qGoal and (qGoal.Value or 0)    or 0
+            -- Tên mob từ quest name (NameMon được set bởi CheckQuest)
+            return questName, NameMon, progress, goal
+        end)
+        if ok and result then return result end
+        return nil, nil, 0, 0
+    end
+
     local function getQuestGui()
+        -- [1] Thử đọc Data.Quest trước (chính xác hơn GUI)
+        local now = tick()
+        if now - _cachedQuestData.ts > 0.3 then  -- cache 0.3s tránh spam
+            local qn, mn, prog, goal = readQuestFromData()
+            _cachedQuestData.value    = qn
+            _cachedQuestData.mobName  = mn
+            _cachedQuestData.progress = prog
+            _cachedQuestData.goal     = goal
+            _cachedQuestData.ts       = now
+        end
+
+        if _cachedQuestData.value and _cachedQuestData.value ~= "" then
+            local hasQuest = true
+            -- Coi như "visible" khi Data.Quest.Value có giá trị hợp lệ
+            -- Title được ghép từ mob name để tương thích với logic string.find ở trên
+            local titleStr = _cachedQuestData.mobName or _cachedQuestData.value
+            return nil, hasQuest, titleStr
+        end
+
+        -- [2] Fallback sang GUI (khi Data.Quest chưa sẵn sàng / server cũ)
         local main = Player.PlayerGui:FindFirstChild("Main")
         if not main then return nil, false, nil end
         local q = main:FindFirstChild("Quest")
@@ -1143,6 +1341,11 @@ do
             if inner then title = inner.Text end
         end)
         return q, visible, title
+    end
+
+    -- Hàm tiện ích: lấy tiến độ quest hiện tại (dùng cho UI Status nếu cần)
+    local function getQuestProgress()
+        return _cachedQuestData.progress, _cachedQuestData.goal
     end
 
     -- ══════════════════════════════════════════════════════════════════
@@ -1217,9 +1420,9 @@ do
         })
 
         task.spawn(function()
-            while task.wait(0.1) do
+            while true do
                 if not (_G.AutoFarm and _G.SpecialFarmMode == "Bone") then
-                    task.wait(0.3)
+                    task.wait(0.1)
                 else
                     pcall(function()
                         local char  = Player.Character
@@ -1306,6 +1509,7 @@ do
                             end
                         end
                     end)
+                    task.wait(0.1)
                 end
             end
         end)
@@ -1353,9 +1557,9 @@ do
         end
 
         task.spawn(function()
-            while task.wait(0.1) do
+            while true do
                 if not (_G.AutoFarm and _G.SpecialFarmMode == "Katakuri") then
-                    task.wait(0.3)
+                    task.wait(0.1)
                 else
                     pcall(function()
                         local char  = Player.Character
@@ -1369,15 +1573,21 @@ do
                         -- ── BOSS ĐÃ SPAWN VÀO WS.ENEMIES → ĐÁNH NGAY ──
                         if boss and inWS then
                             _G.FarmingStatus = "Katakuri: Đang đánh " .. boss.Name .. "!"
-                            _G.IgnoreMobs[boss] = nil
+                            _G.IgnoreMobs[boss] = nil  -- clear mỗi lần, không chỉ lần đầu
                             fightMob(boss, function()
+                                -- Dừng nếu player chết (để waitForRespawn ở vòng sau)
+                                local charC = Player.Character
+                                local humC  = charC and charC:FindFirstChildOfClass("Humanoid")
+                                if humC and humC.Health <= 0 then return false end
                                 return _G.AutoFarm and _G.SpecialFarmMode == "Katakuri"
                             end)
-                            -- Đợi despawn
-                            local w = 0
-                            while boss.Parent and w < 5 do task.wait(0.1); w = w + 0.1 end
-                            _G.FarmingStatus = "Katakuri: Boss đã chết, chờ reset..."
-                            task.wait(3)
+                            -- Nếu player chết, đợi respawn rồi tiếp tục (không return)
+                            local charA = Player.Character
+                            local humA  = charA and charA:FindFirstChildOfClass("Humanoid")
+                            if humA and humA.Health <= 0 then
+                                waitForRespawn()
+                            end
+                            -- Boss còn sống → vòng tiếp theo tiếp tục đánh luôn
                             return
                         end
 
@@ -1427,6 +1637,7 @@ do
                             task.wait(1)
                         end
                     end)
+                    task.wait(0.1)
                 end
             end
         end)
@@ -1544,24 +1755,43 @@ do
         return false
     end
 
-    -- ✅ FIX #5: startQuestWithTimeout dùng vòng chờ thực để tránh race condition
+    -- [OPT-2] startQuestWithTimeout — gọi RemoteFunction ngay khi đủ level,
+    -- KHÔNG cần Tween sát NPC. Fallback Tween chỉ khi server từ chối 2 lần liên tiếp.
+    local _remoteQuestFail = 0
     local function startQuestWithTimeout()
         if not CommF or not NameQuest or not CFrameQuest then return false end
-        NavigateTo(CFrameQuest, NameQuest)
-        local myHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-        if not myHRP then return false end
-        if (CFrameQuest.Position - myHRP.Position).Magnitude > 20 then return false end
 
-        pcall(function() CommF:InvokeServer("StartQuest", NameQuest, LevelQuest) end)
+        local function tryRemoteStart()
+            local success = false
+            pcall(function() CommF:InvokeServer("StartQuest", NameQuest, LevelQuest) end)
+            local elapsed2 = 0
+            repeat
+                task.wait(0.1); elapsed2 = elapsed2 + 0.1
+                local _, visNow = getQuestGui()
+                if visNow then success = true end
+            until success or elapsed2 >= 2
+            return success
+        end
 
-        -- Chờ tối đa 2s để server phản hồi (thay vì đọc ngay lập tức)
-        local elapsed = 0
-        repeat
-            task.wait(0.1)
-            elapsed = elapsed + 0.1
-            local _, visibleNow = getQuestGui()
-            if visibleNow then return true end
-        until elapsed >= 2
+        if tryRemoteStart() then
+            _remoteQuestFail = 0
+            return true
+        end
+        _remoteQuestFail = _remoteQuestFail + 1
+
+        if _remoteQuestFail >= 2 then
+            NavigateTo(CFrameQuest, NameQuest)
+            local elapsed = 0
+            repeat
+                task.wait(0.1); elapsed = elapsed + 0.1
+                local myHRP2 = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+                if myHRP2 and (CFrameQuest.Position - myHRP2.Position).Magnitude <= 20 then break end
+            until elapsed >= 8
+            if tryRemoteStart() then
+                _remoteQuestFail = 0
+                return true
+            end
+        end
 
         local _, visibleFinal = getQuestGui()
         return visibleFinal == true
@@ -1571,7 +1801,8 @@ do
     local _prevMon = nil
 
     task.spawn(function()
-        while task.wait(0.2) do
+        while true do
+            task.wait(0.1)
             if not _G.AutoFarmLevel then
                 _G._questFailCount = 0
                 _prevMon = nil
@@ -1980,6 +2211,86 @@ do
         end)
     end
 
+    -- [OPT-7] COMBO SKILL: thứ tự tung chiêu theo logic
+    -- Z = chiêu gom/AoE (kéo quái vào), X = chiêu gây sát thương chính,
+    -- C = chiêu bổ sung, V = chiêu finisher
+    -- Thứ tự: Z (gather/pull) → X (main dmg) → C (secondary) → V (finisher)
+    -- Tự động chuyển sang mob tiếp theo khi HP quái < 5%
+    local _lastComboTarget = nil
+    local _comboSkillCooldown = 0
+
+    local function executeComboSkill(vHRP, vHum, weaponTip, mobList)
+        local now = tick()
+        if now - _comboSkillCooldown < 0.3 then return end
+        _comboSkillCooldown = now
+
+        if not vHRP or not vHum then return end
+        local mobPos = vHRP.Position
+
+        -- Cập nhật vị trí aim cho namecall hook
+        if weaponTip == "Blox Fruit" then
+            PositionSkillMasteryDevilFruit = mobPos
+            _G.UseSkill = true
+        elseif weaponTip == "Gun" then
+            PositionSkillMasteryGun = mobPos
+            _G.UseSkillGun = true
+        end
+
+        -- Cập nhật MousePos trong tool nếu có
+        pcall(function()
+            local char = Player.Character
+            if char then
+                local tool2 = char:FindFirstChildOfClass("Tool")
+                if tool2 then
+                    local mousePosVal = tool2:FindFirstChild("MousePos")
+                    if mousePosVal then mousePosVal.Value = mobPos end
+                end
+            end
+        end)
+
+        local currentHPPct = vHum.MaxHealth > 0 and (vHum.Health / vHum.MaxHealth * 100) or 0
+
+        if currentHPPct > 30 then
+            -- Máu còn nhiều: Z (gather AoE) → X (main dmg)
+            fireSkill(Enum.KeyCode.Z)
+            task.wait(0.08)
+            fireSkill(Enum.KeyCode.X)
+        elseif currentHPPct > 10 then
+            -- Máu trung bình: X → C (dứt điểm nhanh)
+            fireSkill(Enum.KeyCode.X)
+            task.wait(0.08)
+            fireSkill(Enum.KeyCode.C)
+        else
+            -- Máu cực thấp: C → V (finisher) → tự động chọn target kế tiếp
+            fireSkill(Enum.KeyCode.C)
+            task.wait(0.06)
+            fireSkill(Enum.KeyCode.V)
+            -- [OPT-7] Pre-select mob tiếp theo trước khi mob hiện tại chết
+            if mobList and #mobList > 1 then
+                task.spawn(function()
+                    task.wait(0.1)
+                    for _, nextMob in ipairs(mobList) do
+                        if nextMob ~= _lastComboTarget and isAlive(nextMob) then
+                            local nHRP = nextMob:FindFirstChild("HumanoidRootPart")
+                            local nHum = nextMob:FindFirstChild("Humanoid")
+                            if nHRP and nHum and nHum.Health > 0 then
+                                _lastComboTarget = nextMob
+                                -- Di chuyển về phía mob tiếp theo ngay
+                                local nextCF = CFrame.new(nHRP.Position) * Pos
+                                TweenPlayer(nextCF)
+                                break
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+
+        task.wait(0.1)
+        _G.UseSkill    = false
+        _G.UseSkillGun = false
+    end
+
     local function _masteryCombatLoop(v, isEnabledFn, masteryWeapon, primaryWeapon, healthThreshold, weaponTip)
         local initVHRP = v:FindFirstChild("HumanoidRootPart")
         if not initVHRP then return end
@@ -1998,7 +2309,14 @@ do
         local atkCount       = 0
         local startCL        = tick()
         local lastAttackFire = 0
-        local weaponEquipped = nil
+        -- Equip mastery weapon once before loop (không equip lại mỗi tick)
+        local healthThresholdNow = healthThreshold
+        local initHP = initVHum.Health
+        local initMaxHP = initVHum.MaxHealth
+        local initPct = initMaxHP > 0 and (initHP / initMaxHP * 100) or 100
+        local initWeapon = initPct > healthThresholdNow and primaryWeapon or masteryWeapon
+        EquipWeapon(initWeapon)
+        local weaponEquipped = initWeapon
         repeat
             RunService.Heartbeat:Wait()
             if mobDied then break end
@@ -2042,21 +2360,8 @@ do
                                 local mousePosVal = tool2:FindFirstChild("MousePos")
                                 if mousePosVal then mousePosVal.Value = vHRP.Position end
                             end
-                            -- Update namecall hook position targets
-                            if weaponTip == "Blox Fruit" then
-                                PositionSkillMasteryDevilFruit = vHRP.Position
-                                _G.UseSkill = true
-                            elseif weaponTip == "Gun" then
-                                PositionSkillMasteryGun = vHRP.Position
-                                _G.UseSkillGun = true
-                            end
-                            fireSkill(Enum.KeyCode.Z)
-                            fireSkill(Enum.KeyCode.X)
-                            fireSkill(Enum.KeyCode.C)
-                            fireSkill(Enum.KeyCode.V)
-                            task.wait(0.1)
-                            _G.UseSkill    = false
-                            _G.UseSkillGun = false
+                            -- [OPT-7] Dùng executeComboSkill thay vì fireSkill ngẫu nhiên
+                            executeComboSkill(vHRP, vHum, weaponTip, nil)
                         end)
                     end
                 end
@@ -2069,8 +2374,10 @@ do
 
     local function runMasteryLoop(isEnabledFn, getWeaponFn, weaponTip)
         task.spawn(function()
-            while task.wait(0.2) do
-                if not isEnabledFn() then task.wait(0.3)
+            while true do
+                task.wait(0.1)
+                if not isEnabledFn() then
+                    -- idle
                 else
                     pcall(function()
                         local method          = _G.MasteryMethod or "Quest"
