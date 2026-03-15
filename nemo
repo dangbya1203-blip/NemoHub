@@ -46,6 +46,12 @@ local TP_JITTER    = _cfg.TPJitter    or 0.55
 local ATK_RATE_MIN = _cfg.AtkRateMin  or 0.05
 local ATK_RATE_MAX = _cfg.AtkRateMax  or 0.09
 
+-- Chest farm speed tuning
+-- TOUCH_FIRE_WAIT: thời gian giữa fire(0) và fire(1) — 0.02s = 1 frame, đủ để server nhận
+-- CHEST_IGNORE_TIME: sau khi fire 1 rương xong, bao lâu thì thử lại rương đó (giây)
+local TOUCH_FIRE_WAIT   = _cfg.TouchFireWait   or 0.02
+local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 1.5
+
 -- ==========================================
 -- [2] SERVICES & BIẾN GỐC
 -- ==========================================
@@ -84,11 +90,34 @@ end
 local UncheckedChests = {}
 local FirstRun        = true
 local IgnoredChests   = {}
+local _chestsDirty    = true   -- flag: rebuild UncheckedChests khi có thay đổi
 
 -- Tự động thêm chest mới spawn vào danh sách
 workspace.DescendantAdded:Connect(function(obj)
     if obj:IsA("Part") and obj.Name:find("Chest") then
         table.insert(UncheckedChests, obj)
+        _chestsDirty = true
+    end
+end)
+
+-- Xóa tức thì khi rương bị destroy, không cần rebuild scan
+workspace.DescendantRemoving:Connect(function(obj)
+    if obj:IsA("Part") and obj.Name:find("Chest") then
+        _chestsDirty = true
+        IgnoredChests[obj] = nil   -- giải phóng memory ngay
+    end
+end)
+
+-- Dọn IgnoredChests định kỳ phòng memory leak (chest đã hết cooldown còn trong bảng)
+task.spawn(function()
+    while true do
+        task.wait(10)
+        local now = tick()
+        for chest, t in pairs(IgnoredChests) do
+            if not chest or not chest.Parent or (now - t > CHEST_IGNORE_TIME) then
+                IgnoredChests[chest] = nil
+            end
+        end
     end
 end)
 
@@ -893,27 +922,45 @@ local function getChestsSorted()
                 table.insert(UncheckedChests, Object)
             end
         end
+        _chestsDirty = true
     end
 
-    -- Dọn entry nil/đã bị destroy khỏi list
-    local cleaned = {}
-    for _, Chest in ipairs(UncheckedChests) do
-        if Chest and Chest.Parent then
-            table.insert(cleaned, Chest)
+    -- Chỉ rebuild cleaned list khi có rương mới thêm/bị destroy (dirty flag)
+    -- Tránh tạo bảng mới mỗi 0.05s khi list không đổi
+    if _chestsDirty then
+        _chestsDirty = false
+        local cleaned = {}
+        for _, Chest in ipairs(UncheckedChests) do
+            if Chest and Chest.Parent then
+                table.insert(cleaned, Chest)
+            end
         end
+        UncheckedChests = cleaned
     end
-    UncheckedChests = cleaned
+
+    local now = tick()
+    local char = LocalPlayer.Character
+    local RootPart = char and char:FindFirstChild("HumanoidRootPart")
 
     local Chests = {}
     for _, Chest in ipairs(UncheckedChests) do
         if Chest:IsA("BasePart") and Chest:FindFirstChild("TouchInterest") then
             local lastTouched = IgnoredChests[Chest]
-            if not lastTouched or (tick() - lastTouched > 3) then
+            if not lastTouched or (now - lastTouched > CHEST_IGNORE_TIME) then
                 table.insert(Chests, Chest)
             end
         end
     end
-    DistanceFromPlrSort(Chests)
+
+    -- Sort dùng dot product thay Magnitude (tránh sqrt, nhanh hơn ~30%)
+    if RootPart then
+        local rx, ry, rz = RootPart.Position.X, RootPart.Position.Y, RootPart.Position.Z
+        table.sort(Chests, function(A, B)
+            local ax, ay, az = A.Position.X - rx, A.Position.Y - ry, A.Position.Z - rz
+            local bx, by, bz = B.Position.X - rx, B.Position.Y - ry, B.Position.Z - rz
+            return ax*ax + ay*ay + az*az < bx*bx + by*by + bz*bz
+        end)
+    end
     return Chests
 end
 
@@ -1024,13 +1071,13 @@ local function jumpIntoChest(RootPart, Chest, maxAttempts)
         pcall(function()
             RootPart.AssemblyLinearVelocity = (Chest.Position - RootPart.Position).Unit * 28
         end)
-        task.wait(0.06)
+        task.wait(TOUCH_FIRE_WAIT)
         RootPart.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
 
         pcall(function()
             if firetouchinterest then
                 firetouchinterest(RootPart, Chest, 0)
-                task.wait(hrand(0.06, 0.10))
+                task.wait(TOUCH_FIRE_WAIT)
                 firetouchinterest(RootPart, Chest, 1)
             end
         end)
@@ -1047,7 +1094,7 @@ local function TouchChest(RootPart, Chest)
     pcall(function()
         if firetouchinterest then
             firetouchinterest(RootPart, Chest, 0)
-            task.wait(hrand(0.07, 0.11))
+            task.wait(TOUCH_FIRE_WAIT)   -- 0.02s thay vì 0.07-0.11s
             firetouchinterest(RootPart, Chest, 1)
             fired = true
         end
@@ -1069,11 +1116,11 @@ local function GrabFruit(RootPart, fruit)
     pcall(function()
         if firetouchinterest then
             firetouchinterest(RootPart, handle, 0)
-            task.wait(hrand(0.08, 0.15))
+            task.wait(TOUCH_FIRE_WAIT)
             firetouchinterest(RootPart, handle, 1)
         end
     end)
-    task.wait(hrand(0.4, 0.7))
+    task.wait(hrand(0.10, 0.15))   -- đủ để server xác nhận nhặt trái
     StoreFruit()
 end
 
@@ -1099,7 +1146,7 @@ local function main()
         StatusLabel.Text = "Status: Chờ map load rương..."
         StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
         local deadline = tick() + 10
-        repeat task.wait(0.5) until #UncheckedChests > 0 or tick() >= deadline
+        repeat task.wait(0.1) until #UncheckedChests > 0 or tick() >= deadline
     end
 
     while true do
@@ -1157,12 +1204,12 @@ local function main()
 
         local Chests = getChestsSorted()
         if #Chests == 0 then
-            -- Chờ tối đa 12 giây để rương mới spawn/respawn.
+            -- Chờ tối đa 6 giây để rương mới spawn/respawn.
             -- Tránh hop ngay khi server vừa join mà map chưa load xong.
-            StatusLabel.Text = "Status: Không có rương, chờ spawn (12s)..."
+            StatusLabel.Text = "Status: Không có rương, chờ spawn (6s)..."
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-            local waitDeadline = tick() + 12
-            repeat task.wait(1) until #getChestsSorted() > 0 or tick() >= waitDeadline
+            local waitDeadline = tick() + 6
+            repeat task.wait(0.2) until #getChestsSorted() > 0 or tick() >= waitDeadline
             if #getChestsSorted() == 0 then
                 HopServer()
                 break
@@ -1182,7 +1229,7 @@ local function main()
             end
         end
 
-        task.wait(0.05)
+        task.wait()  -- 1 frame (~0.016s) thay vì 0.05s
     end
 end
 
