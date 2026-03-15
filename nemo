@@ -1,15 +1,33 @@
 -- ================================================================
--- 🏆 NEMOHUB ULTIMATE V4.4 - NO CHEST WAIT
--- Thêm: Dough King Full Chain, Darkbeard, Fast Attack Core
+-- 🏆 NEMOHUB ULTIMATE V4.6 - THE FINAL MASTERPIECE
+-- Tích hợp: Dough King, Darkbeard, Fast Attack, Anti-Ghost, Force Stop (K)
 -- ================================================================
+
 -- ==========================================
--- [1] CONFIG (đọc từ loader qua getgenv())
+-- [1] TẠO CÔNG TẮC FORCE STOP TỔNG BẰNG PHÍM K
+-- ==========================================
+getgenv().NemoRunning = true
+local UserInputService = game:GetService("UserInputService")
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.K then
+        if getgenv().NemoRunning then
+            getgenv().NemoRunning = false
+            warn("[NemoHub] 🔴 FORCE STOP ĐÃ KÍCH HOẠT! Dừng toàn bộ kịch bản.")
+            local ui = game:GetService("CoreGui"):FindFirstChild("NemoHub_UI")
+            if ui and ui:FindFirstChild("Frame") and ui.Frame:FindFirstChild("Status") then
+                ui.Frame.Status.Text = "🔴 SCRIPT ĐÃ DỪNG BỞI NGƯỜI DÙNG (K) 🔴"
+                ui.Frame.Status.TextColor3 = Color3.fromRGB(255, 50, 50)
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- [2] CONFIG (Đọc từ loader)
 -- ==========================================
 local _cfg = getgenv().NemoConfig or {}
-
--- Key check
 local _key = tostring(getgenv().NemoKey or "")
--- Reset NemoValidKeys để tránh bị session cũ inject key giả
 getgenv().NemoValidKeys = nil
 local _validKeys = {"tester2026"}
 print("[NemoHub] Key nhận được: '" .. _key .. "'")
@@ -26,7 +44,7 @@ if not _keyValid then
             task.wait(5)
         end
     end)
-    return  -- top-level return, không nằm trong block nào
+    return  
 end
 
 local InstantTP     = _cfg.InstantTP     ~= nil and _cfg.InstantTP     or true
@@ -37,18 +55,15 @@ local AutoDarkbeard = _cfg.AutoDarkbeard ~= nil and _cfg.AutoDarkbeard or true
 local AutoDoughKing = _cfg.AutoDoughKing ~= nil and _cfg.AutoDoughKing or true
 local RandomCFrame  = _cfg.RandomCFrame  ~= nil and _cfg.RandomCFrame  or true
 
--- Anti-detect humanizer
 local HUMANIZE_MIN = _cfg.HumanizeMin or 0.06
 local HUMANIZE_MAX = _cfg.HumanizeMax or 0.10
 local TP_JITTER    = _cfg.TPJitter    or 0.55
 local ATK_RATE_MIN = _cfg.AtkRateMin  or 0.05
 local ATK_RATE_MAX = _cfg.AtkRateMax  or 0.09
-
--- CHEST_IGNORE_TIME: sau khi fire 1 rương xong, bao lâu thì thử lại rương đó (giây)
 local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 1.5
 
 -- ==========================================
--- [2] SERVICES & BIẾN GỐC
+-- [3] SERVICES & BIẾN GỐC
 -- ==========================================
 local Players            = game:GetService("Players")
 local TeleportService    = game:GetService("TeleportService")
@@ -63,16 +78,7 @@ local Player      = LocalPlayer
 local RS          = ReplicatedStorage
 local PlaceId     = game.PlaceId
 
--- ==========================================
--- HUMANIZER HELPERS
--- ==========================================
--- Random delay giữa min-max để hành vi không đều đặn như bot
-local function hrand(mn, mx)
-    return mn + math.random() * (mx - mn)
-end
--- hrand: dùng trong jitterCF, anti-AFK, fast attack, chest fire, v.v.
-
--- Jitter CFrame: dịch ngẫu nhiên trong bán kính r studs trên mặt phẳng ngang
+local function hrand(mn, mx) return mn + math.random() * (mx - mn) end
 local function jitterCF(cf, r)
     r = r or TP_JITTER
     local angle = math.random() * math.pi * 2
@@ -83,9 +89,8 @@ end
 local UncheckedChests = {}
 local FirstRun        = true
 local IgnoredChests   = {}
-local _chestsDirty    = false  -- FirstRun scan sẽ set true khi chạy lần đầu
+local _chestsDirty    = false
 
--- Tự động thêm chest mới spawn vào danh sách
 workspace.DescendantAdded:Connect(function(obj)
     if obj:IsA("Part") and obj.Name:find("Chest") then
         table.insert(UncheckedChests, obj)
@@ -93,17 +98,15 @@ workspace.DescendantAdded:Connect(function(obj)
     end
 end)
 
--- Xóa tức thì khi rương bị destroy, không cần rebuild scan
 workspace.DescendantRemoving:Connect(function(obj)
     if obj:IsA("Part") and obj.Name:find("Chest") then
         _chestsDirty = true
-        IgnoredChests[obj] = nil   -- giải phóng memory ngay
+        IgnoredChests[obj] = nil
     end
 end)
 
--- Dọn IgnoredChests định kỳ phòng memory leak (chest đã hết cooldown còn trong bảng)
 task.spawn(function()
-    while true do
+    while getgenv().NemoRunning do
         task.wait(10)
         local now = tick()
         for chest, t in pairs(IgnoredChests) do
@@ -114,11 +117,10 @@ task.spawn(function()
     end
 end)
 
--- Cờ điều khiển Fast Attack core
 _G.IsAttackingBoss = false
 
 -- ==========================================
--- [3] AUTO REJOIN + ANTI-AFK
+-- [4] AUTO REJOIN & ANTI-AFK
 -- ==========================================
 task.spawn(function()
     local promptOverlay = CoreGui:WaitForChild("RobloxPromptGui"):WaitForChild("promptOverlay")
@@ -130,41 +132,30 @@ task.spawn(function()
     end)
 end)
 
--- Anti-AFK: click ngẫu nhiên để không bị kick, interval không đều
 task.spawn(function()
-    while true do
-        -- Chờ 20-40 giây ngẫu nhiên
+    while getgenv().NemoRunning do
         task.wait(hrand(20, 40))
         pcall(function()
             VirtualUser:CaptureController()
-            VirtualUser:ClickButton2(Vector2.new(
-                math.random(200, 600),
-                math.random(200, 500)
-            ))
+            VirtualUser:ClickButton2(Vector2.new(math.random(200, 600), math.random(200, 500)))
         end)
     end
 end)
 
 -- ==========================================
--- [4] HỆ THỐNG LƯU TRỮ & UI
+-- [5] HỆ THỐNG LƯU TRỮ & UI
 -- ==========================================
 local ServerFile = "NemoHub_Servers_" .. tostring(PlaceId) .. ".json"
 local StatFile   = "NemoHub_Stats_"   .. tostring(PlaceId) .. ".json"
-
--- Thời gian blacklist server (giây) — sau đó server tự hồi lại để farm tiếp
 local SERVER_COOLDOWN = (_cfg.ServerCooldown or 30) * 60
 
--- VisitedServers: { [jobId] = timestamp_rời_server }
 local VisitedServers = {}
 local UIStats = { StartTime = os.time() }
 
 pcall(function()
     if isfile and isfile(ServerFile) then
         local decoded = HttpService:JSONDecode(readfile(ServerFile))
-        -- Tương thích ngược: nếu file cũ là array thì bỏ qua
-        if type(decoded) == "table" and not decoded[1] then
-            VisitedServers = decoded
-        end
+        if type(decoded) == "table" and not decoded[1] then VisitedServers = decoded end
     end
 end)
 pcall(function()
@@ -172,27 +163,19 @@ pcall(function()
         local decoded = HttpService:JSONDecode(readfile(StatFile))
         if type(decoded) == "table" then
             UIStats = decoded
-            -- Đảm bảo StartTime luôn có giá trị hợp lệ
-            if not UIStats.StartTime or type(UIStats.StartTime) ~= "number" then
-                UIStats.StartTime = os.time()
-            end
+            if not UIStats.StartTime or type(UIStats.StartTime) ~= "number" then UIStats.StartTime = os.time() end
         end
     end
 end)
 
--- Ghi nhận server hiện tại khi vào
 VisitedServers[game.JobId] = os.time()
 pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
 
--- Helper: server có đang trong cooldown không?
 local function isServerCoolingDown(jobId)
     local t = VisitedServers[jobId]
     if not t then return false end
     return (os.time() - t) < SERVER_COOLDOWN
 end
-
--- Flag dừng farm thủ công (nút STOP trên UI)
-local _farmStopped = false
 
 local function CreateOverlayUI()
     local existingUI = CoreGui:FindFirstChild("NemoHub_UI")
@@ -207,6 +190,7 @@ local function CreateOverlayUI()
     Overlay.BackgroundTransparency = 0.55
     Overlay.Parent = ScreenGui
     local CenterFrame = Instance.new("Frame")
+    CenterFrame.Name = "Frame"
     CenterFrame.Size = UDim2.new(0, 600, 0, 320)
     CenterFrame.Position = UDim2.new(0.5, -300, 0.5, -160)
     CenterFrame.BackgroundTransparency = 1
@@ -227,8 +211,9 @@ local function CreateOverlayUI()
     LogoLabel.TextStrokeTransparency = 0
     LogoLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     LogoLabel.Parent = CenterFrame
-    local function CreateLabel(size, isRich)
+    local function CreateLabel(name, size, isRich)
         local lbl = Instance.new("TextLabel")
+        lbl.Name = name
         lbl.Size = UDim2.new(1, 0, 0, size + 10)
         lbl.BackgroundTransparency = 1
         lbl.Font = Enum.Font.GothamBold
@@ -240,39 +225,9 @@ local function CreateOverlayUI()
         lbl.Parent = CenterFrame
         return lbl
     end
-    local StatsLabel  = CreateLabel(20, true)
-    local StatusLabel = CreateLabel(18)
-    local TimeLabel   = CreateLabel(18)
-
-    -- Nút STOP / RESUME
-    local StopBtn = Instance.new("TextButton")
-    StopBtn.Size = UDim2.new(0, 180, 0, 38)
-    StopBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
-    StopBtn.BorderSizePixel = 0
-    StopBtn.Font = Enum.Font.GothamBold
-    StopBtn.TextSize = 18
-    StopBtn.Text = "⏹ STOP FARM"
-    StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    StopBtn.TextStrokeTransparency = 0.5
-    StopBtn.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    StopBtn.Parent = CenterFrame
-    Instance.new("UICorner", StopBtn).CornerRadius = UDim.new(0, 8)
-    StopBtn.MouseButton1Click:Connect(function()
-        _farmStopped = not _farmStopped
-        if _farmStopped then
-            StopBtn.Text = "▶ RESUME FARM"
-            StopBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 40)
-            StatusLabel.Text = "Status: ⏸ Đã dừng thủ công"
-            StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-            _G.IsAttackingBoss = false
-        else
-            StopBtn.Text = "⏹ STOP FARM"
-            StopBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
-            StatusLabel.Text = "Status: Tiếp tục farm..."
-            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-        end
-    end)
-
+    local StatsLabel  = CreateLabel("Stats", 20, true)
+    local StatusLabel = CreateLabel("Status", 18)
+    local TimeLabel   = CreateLabel("Time", 18)
     return StatsLabel, StatusLabel, TimeLabel
 end
 
@@ -311,7 +266,8 @@ local function GetDroppedFruits()
 end
 
 task.spawn(function()
-    while task.wait(1) do
+    while getgenv().NemoRunning do
+        task.wait(1)
         local fruitText = "None"
         local droppedFruits = GetDroppedFruits()
         if #droppedFruits > 0 then
@@ -322,22 +278,15 @@ task.spawn(function()
             tostring(GetStat("Level")), FormatNumber(GetStat("Beli")), FormatNumber(GetStat("Fragments")), tostring(GetRace()), tostring(fruitText)
         )
         local elapsed = os.time() - UIStats.StartTime
-        TimeLabel.Text = string.format(
-            "Time Elapsed: %d day %d hours %d minutes %d seconds",
-            math.floor(elapsed / 86400), math.floor((elapsed % 86400) / 3600),
-            math.floor((elapsed % 3600) / 60), elapsed % 60
-        )
+        TimeLabel.Text = string.format("Time Elapsed: %d day %d hours %d minutes %d seconds", math.floor(elapsed / 86400), math.floor((elapsed % 86400) / 3600), math.floor((elapsed % 3600) / 60), elapsed % 60)
         pcall(function() if writefile then writefile(StatFile, HttpService:JSONEncode(UIStats)) end end)
     end
 end)
 
 -- ==========================================
--- [5] FAST ATTACK & HIT REGISTRATION CORE
+-- [6] FAST ATTACK & HIT REGISTRATION CORE
 -- ==========================================
-local function isAlive(char)
-    return char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0
-end
-
+local function isAlive(char) return char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 end
 local RegisterAttack, RegisterHit, HNCHit, HNCAtk, CombatFlags, HitFunction
 
 task.spawn(function()
@@ -369,15 +318,12 @@ task.spawn(function()
     end)
 end)
 
--- Scan thêm remote có attribute Id (anti-cheat bypass)
 local _hitRegData = { remote = nil, remoteId = nil }
 task.spawn(function()
     pcall(function()
         local Modules = RS:WaitForChild("Modules", 5); if not Modules then return end
         local foldersToCheck = {}
-        for _, name in ipairs({"Util","Common","Remotes","Assets","FX"}) do
-            pcall(function() table.insert(foldersToCheck, RS:WaitForChild(name, 3)) end)
-        end
+        for _, name in ipairs({"Util","Common","Remotes","Assets","FX"}) do pcall(function() table.insert(foldersToCheck, RS:WaitForChild(name, 3)) end) end
         local function scanFolder(folder)
             if not folder then return end
             pcall(function()
@@ -397,10 +343,8 @@ task.spawn(function()
     end)
 end)
 
--- Danh sách limb để random hit part
 local LIMBS = {"RightLowerArm","RightUpperArm","LeftLowerArm","LeftUpperArm","RightHand","LeftHand"}
 
--- Gửi hit cho TẤT CẢ quái trong tầm 65 studs
 local function executeFastAttack(toolTipFilter)
     local char = Player.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -415,30 +359,21 @@ local function executeFastAttack(toolTipFilter)
 
     local rootPos = root.Position
 
-    -- Blox Fruit dùng LeftClickRemote riêng
     if tip == "Blox Fruit" and tool:FindFirstChild("LeftClickRemote") then
         local lcr = tool.LeftClickRemote; local hasMob = false
         for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
             if folder then
                 for _, enemy in ipairs(folder:GetChildren()) do
                     local eHRP = enemy:FindFirstChild("HumanoidRootPart")
-                    if eHRP and isAlive(enemy) and not enemy:GetAttribute("IsBoat")
-                        and (eHRP.Position - rootPos).Magnitude <= 65
-                    then hasMob = true; break end
+                    if eHRP and isAlive(enemy) and not enemy:GetAttribute("IsBoat") and (eHRP.Position - rootPos).Magnitude <= 65 then hasMob = true; break end
                 end
             end
             if hasMob then break end
         end
-        if hasMob then
-            pcall(function()
-                lcr:FireServer(Vector3.new(0.01, -500, 0.01), 1, true)
-                lcr:FireServer(false)
-            end)
-        end
+        if hasMob then pcall(function() lcr:FireServer(Vector3.new(0.01, -500, 0.01), 1, true); lcr:FireServer(false) end) end
         return
     end
 
-    -- Melee / Sword / Gun: build target list
     local mainTarget = nil; local targets = {}
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
         if folder then
@@ -457,23 +392,14 @@ local function executeFastAttack(toolTipFilter)
     end
     if not mainTarget or #targets == 0 then return end
 
-    -- Gửi hit theo thứ tự ưu tiên
-    if CombatFlags and HitFunction and RegisterAttack then
-        pcall(function() RegisterAttack:FireServer(0); HitFunction(mainTarget, targets) end)
-        return
-    end
-    if RegisterAttack and RegisterHit then
-        pcall(function() RegisterAttack:FireServer(0); RegisterHit:FireServer(mainTarget, targets) end)
-        return
-    end
+    if CombatFlags and HitFunction and RegisterAttack then pcall(function() RegisterAttack:FireServer(0); HitFunction(mainTarget, targets) end); return end
+    if RegisterAttack and RegisterHit then pcall(function() RegisterAttack:FireServer(0); RegisterHit:FireServer(mainTarget, targets) end); return end
     if HNCHit and HNCAtk then
         local id = tostring(Player.UserId):sub(2,4) .. tostring(coroutine.running()):sub(11,15)
-        pcall(function() HNCAtk:FireServer() end)
-        pcall(function() HNCHit:FireServer(mainTarget, targets, nil, nil, id) end)
+        pcall(function() HNCAtk:FireServer() end); pcall(function() HNCHit:FireServer(mainTarget, targets, nil, nil, id) end)
     end
 end
 
--- Hit registration fallback với XOR seed (anti-cheat bypass)
 local _seedCache = { value = 0, time = 0 }
 local function executeHitRegistration()
     pcall(function()
@@ -484,17 +410,12 @@ local function executeHitRegistration()
             if not folder then return end
             for _, target in ipairs(folder:GetChildren()) do
                 local hum2 = target:FindFirstChild("Humanoid"); local hrp2 = target:FindFirstChild("HumanoidRootPart")
-                if hum2 and hrp2 and hum2.Health > 0 and target ~= char
-                    and (hrp2.Position - hrp.Position).Magnitude <= 60
-                then
-                    for _, child in ipairs(target:GetChildren()) do
-                        if child:IsA("BasePart") then table.insert(hitTargets, {target, child}) end
-                    end
+                if hum2 and hrp2 and hum2.Health > 0 and target ~= char and (hrp2.Position - hrp.Position).Magnitude <= 60 then
+                    for _, child in ipairs(target:GetChildren()) do if child:IsA("BasePart") then table.insert(hitTargets, {target, child}) end end
                 end
             end
         end
-        scanEnemyFolder(workspace:FindFirstChild("Enemies"))
-        scanEnemyFolder(workspace:FindFirstChild("Characters"))
+        scanEnemyFolder(workspace:FindFirstChild("Enemies")); scanEnemyFolder(workspace:FindFirstChild("Characters"))
         if #hitTargets == 0 then return end
 
         local tool  = char:FindFirstChildOfClass("Tool"); if not tool then return end
@@ -514,14 +435,11 @@ local function executeHitRegistration()
         local targetHead = hitTargets[1][1]:FindFirstChild("Head"); if not targetHead then return end
         pcall(function() hitRemote2:FireServer(targetHead, hitTargets, {}) end)
 
-        -- XOR encode bypass
         if _hitRegData.remote and _hitRegData.remoteId then
             pcall(function()
                 local remoteCode    = "RE/RegisterHit"
                 local encKey        = math.floor(workspace:GetServerTimeNow() / 10 % 10) + 1
-                local encodedString = string.gsub(remoteCode, ".", function(c)
-                    return string.char(bit32.bxor(string.byte(c), encKey))
-                end)
+                local encodedString = string.gsub(remoteCode, ".", function(c) return string.char(bit32.bxor(string.byte(c), encKey)) end)
                 local finalId = bit32.bxor(_hitRegData.remoteId + 909090, seed * 2)
                 cloneref(_hitRegData.remote):FireServer(encodedString, finalId, targetHead, hitTargets)
             end)
@@ -529,28 +447,22 @@ local function executeHitRegistration()
     end)
 end
 
--- Loop fast attack: interval ngẫu nhiên nhẹ, không làm chậm đáng kể
 task.spawn(function()
-    while true do
+    while getgenv().NemoRunning do
         task.wait(hrand(ATK_RATE_MIN, ATK_RATE_MAX))
-        if _G.IsAttackingBoss then
-            pcall(executeFastAttack)
-            pcall(executeFastAttack)
-        end
+        if _G.IsAttackingBoss then pcall(executeFastAttack); pcall(executeFastAttack) end
     end
 end)
 
--- Loop hit registration fallback: interval ngẫu nhiên
 task.spawn(function()
-    while true do
+    while getgenv().NemoRunning do
         task.wait(hrand(0.09, 0.18))
         if _G.IsAttackingBoss then pcall(executeHitRegistration) end
     end
 end)
 
--- Anti-stun / anti-knockback loop
 task.spawn(function()
-    while true do
+    while getgenv().NemoRunning do
         task.wait(hrand(0.08, 0.15))
         if not _G.IsAttackingBoss then continue end
         pcall(function()
@@ -560,8 +472,7 @@ task.spawn(function()
             local Stun = char:FindFirstChild("Stun"); local Busy = char:FindFirstChild("Busy")
             if Stun and Stun.Value ~= 0 then Stun.Value = 0 end
             if Busy and Busy.Value then Busy.Value = false end
-            if hum:GetState() == Enum.HumanoidStateType.Ragdoll
-            or hum:GetState() == Enum.HumanoidStateType.FallingDown then
+            if hum:GetState() == Enum.HumanoidStateType.Ragdoll or hum:GetState() == Enum.HumanoidStateType.FallingDown then
                 hum:ChangeState(Enum.HumanoidStateType.GettingUp)
             end
             if hum.PlatformStand then hum.PlatformStand = false end
@@ -575,29 +486,26 @@ task.spawn(function()
     end
 end)
 
--- Hitbox expand qua getgc + setupvalue (cần executor hỗ trợ debug API)
 task.spawn(function()
     pcall(function()
-        repeat task.wait(0.5) until getgc
+        repeat task.wait(0.5) until getgc or not getgenv().NemoRunning
         local WeaponData = require(RS:WaitForChild("Modules"):WaitForChild("WeaponData"))
         if not getgenv().attackMelee then
             for _, v in next, getgc(true) do
                 if typeof(v) == "function" then
                     local info = debug.getinfo and debug.getinfo(v)
-                    if info and info.name == "attackMelee" then
-                        getgenv().attackMelee = v; break
-                    end
+                    if info and info.name == "attackMelee" then getgenv().attackMelee = v; break end
                 end
             end
         end
         if not getgenv().attackMelee then return end
-        while task.wait(0.02) do
+        while getgenv().NemoRunning do
+            task.wait(0.02)
             pcall(function()
                 if not _G.IsAttackingBoss then return end
                 local char2 = Player.Character
                 local tool2 = char2 and char2:FindFirstChildOfClass("Tool"); if not tool2 then return end
                 local WName = tool2:GetAttribute("WeaponName"); if not WName or not WeaponData[WName] then return end
-                -- Reset cooldown + expand hitbox
                 for i, uv in next, getupvalues(getgenv().attackMelee) do
                     if typeof(uv) == "number" then setupvalue(getgenv().attackMelee, i, 0) end
                     if typeof(uv) == "boolean" then setupvalue(getgenv().attackMelee, i, false) end
@@ -610,7 +518,7 @@ task.spawn(function()
 end)
 
 -- ==========================================
--- [6] HÀM XỬ LÝ NHÂN VẬT
+-- [7] HÀM XỬ LÝ NHÂN VẬT & DI CHUYỂN
 -- ==========================================
 local function AutoSelectTeam()
     local function hasRealTeam()
@@ -621,24 +529,15 @@ local function AutoSelectTeam()
     if hasRealTeam() then return end
 
     local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-    local teamName  = JoinTeam  -- "Pirates" hoặc "Marines"
+    local teamName  = JoinTeam  
 
     local function trySelectTeam()
-        -- Cách 1: SetTeam (tên remote đúng hiện tại) + guard ChooseTeam.Visible
         pcall(function()
             local mainMinimal = PlayerGui:FindFirstChild("Main (minimal)")
             local chooseTeam  = mainMinimal and mainMinimal:FindFirstChild("ChooseTeam")
-            if chooseTeam and chooseTeam.Visible then
-                RS.Remotes.CommF_:InvokeServer("SetTeam", teamName)
-            end
+            if chooseTeam and chooseTeam.Visible then RS.Remotes.CommF_:InvokeServer("SetTeam", teamName) end
         end)
-
-        -- Cách 2: SelectTeam fallback (server version cũ)
-        pcall(function()
-            RS.Remotes.CommF_:InvokeServer("SelectTeam", teamName)
-        end)
-
-        -- Cách 3: getconnections vào button Activated
+        pcall(function() RS.Remotes.CommF_:InvokeServer("SelectTeam", teamName) end)
         pcall(function()
             local mainMinimal = PlayerGui:FindFirstChild("Main (minimal)")
             if not mainMinimal then return end
@@ -649,15 +548,11 @@ local function AutoSelectTeam()
                 if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
                     and (string.find(string.lower(obj.Name), string.lower(teamName))
                       or (obj.Parent and string.find(string.lower(obj.Parent.Name), string.lower(teamName))))
-                then
-                    button = obj; break
-                end
+                then button = obj; break end
             end
             if button then
                 if getconnections then
-                    for _, conn in ipairs(getconnections(button.Activated)) do
-                        pcall(conn.Function)
-                    end
+                    for _, conn in ipairs(getconnections(button.Activated)) do pcall(conn.Function) end
                 else
                     local vim = game:GetService("VirtualInputManager")
                     local pos = button.AbsolutePosition + button.AbsoluteSize / 2
@@ -670,7 +565,7 @@ local function AutoSelectTeam()
     end
 
     local lastAttempt = 0
-    while not hasRealTeam() do
+    while not hasRealTeam() and getgenv().NemoRunning do
         if tick() - lastAttempt >= 0.5 then
             trySelectTeam()
             lastAttempt = tick()
@@ -700,7 +595,7 @@ local function Teleport(Goal, Speed)
         toggleNoclip(true)
         pcall(function()
             local Magnitude = (RootPart.Position - Goal.Position).Magnitude
-            while Magnitude > 1 do
+            while Magnitude > 1 and getgenv().NemoRunning do
                 if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
                 local Direction    = (Goal.Position - RootPart.Position).unit
                 local NextPosition = RootPart.Position + Direction * math.min(Speed * task.wait(), Magnitude)
@@ -709,12 +604,12 @@ local function Teleport(Goal, Speed)
                 Magnitude = (RootPart.Position - Goal.Position).Magnitude
             end
         end)
-        toggleNoclip(false)  -- luôn tắt noclip dù break hay error giữa chừng
+        toggleNoclip(false) 
     end
 end
 
 -- ==========================================
--- [7] HELPER CHUNG
+-- [8] HELPER VẬT PHẨM & KẺ THÙ
 -- ==========================================
 local replicated = ReplicatedStorage
 
@@ -724,18 +619,13 @@ end
 
 local _invCache = { data = nil, time = 0 }
 local function GetM(name)
-    -- Cache 3 giây, tránh spam InvokeServer mỗi frame
     if not _invCache.data or (tick() - _invCache.time > 3) then
-        local ok, result = pcall(function()
-            return replicated.Remotes.CommF_:InvokeServer("getInventory")
-        end)
+        local ok, result = pcall(function() return replicated.Remotes.CommF_:InvokeServer("getInventory") end)
         _invCache.data = (ok and result) or _invCache.data or {}
         _invCache.time = tick()
     end
     for _, tab in pairs(_invCache.data) do
-        if type(tab) == "table" and tab.Type == "Material" and tab.Name == name then
-            return tab.Count or 0
-        end
+        if type(tab) == "table" and tab.Type == "Material" and tab.Name == name then return tab.Count or 0 end
     end
     return 0
 end
@@ -752,10 +642,7 @@ local function GetConnectionEnemies(a)
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
         if folder then
             for _, v in pairs(folder:GetChildren()) do
-                if v:IsA("Model")
-                    and ((typeof(a) == "table" and table.find(a, v.Name)) or v.Name == a)
-                    and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0
-                then return v end
+                if v:IsA("Model") and ((typeof(a) == "table" and table.find(a, v.Name)) or v.Name == a) and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then return v end
             end
         end
     end
@@ -775,69 +662,69 @@ local function StoreFruit()
 end
 
 -- ==========================================
--- [8] LOGIC DARKBEARD
+-- [9] LOGIC DARKBEARD (FIX LỖI MẤT KEY DO TÊN)
 -- ==========================================
+local _fistFlag = false
 
--- Fist of Darkness là Tool tạm thời (mất khi die/disconnect, không lưu inventory).
--- Dùng partial name match (case-insensitive) vì tên thực tế trong game
--- có thể khác với "Fist of Darkness" (viết hoa chữ cái, space, v.v.)
-local function _scanForFist(parent)
-    if not parent then return nil end
-    for _, v in ipairs(parent:GetChildren()) do
-        if string.find(string.lower(v.Name), "fist") then return v end
+local function _seedFistFlag()
+    -- Sửa lại: Quét bằng string.lower để không bỏ sót key viết hoa/thường
+    for _, item in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if string.find(string.lower(item.Name), "fist") and string.find(string.lower(item.Name), "darkness") then _fistFlag = true; break end
     end
-    return nil
+    if LocalPlayer.Character then
+        for _, item in ipairs(LocalPlayer.Character:GetChildren()) do
+            if string.find(string.lower(item.Name), "fist") and string.find(string.lower(item.Name), "darkness") then _fistFlag = true; break end
+        end
+    end
 end
 
--- Background polling thread set flag mỗi 0.05s để break tức thì
--- kể cả khi main loop đang bận bên trong TouchChest
-local _hasFist = false
-task.spawn(function()
-    while true do
-        _hasFist = (_scanForFist(LocalPlayer.Backpack) or _scanForFist(LocalPlayer.Character)) ~= nil
-        task.wait(0.05)
+local function _attachFistListeners(char)
+    if not char then return end
+    char.ChildAdded:Connect(function(child)
+        if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then _fistFlag = true end
+    end)
+    char.ChildRemoved:Connect(function(child)
+        if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then 
+            _fistFlag = false; _seedFistFlag()
+        end
+    end)
+end
+
+LocalPlayer.Backpack.ChildAdded:Connect(function(child)
+    if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then _fistFlag = true end
+end)
+LocalPlayer.Backpack.ChildRemoved:Connect(function(child)
+    if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then 
+        _fistFlag = false; _seedFistFlag() 
     end
 end)
+
+LocalPlayer.CharacterRemoving:Connect(function() _fistFlag = false end)
+LocalPlayer.CharacterAdded:Connect(function(char) _attachFistListeners(char) end)
+_seedFistFlag()
+_attachFistListeners(LocalPlayer.Character)
 
 local function HasFistOfDarkness()
-    if _hasFist then return true end
-    -- Fallback trực tiếp phòng thread chưa chạy vòng đầu
-    return (_scanForFist(LocalPlayer.Backpack) or _scanForFist(LocalPlayer.Character)) ~= nil
+    if _fistFlag then return true end
+    _seedFistFlag()
+    return _fistFlag
 end
-
-local function EquipFistDirect()
-    -- Equip dùng cùng scan phòng tên khác exact string
-    local fist = _scanForFist(LocalPlayer.Backpack)
-    if fist and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid:EquipTool(fist)
-    end
-end
-
--- Background pollers cho Dough King (Sea 3) — detect tức thì khi có chalice/boss spawn
-local _hasChalice    = false
-local _doughKingLive = false
-task.spawn(function()
-    while true do
-        _hasChalice    = (GetBP("God's Chalice") or GetBP("Sweet Chalice")) ~= nil
-        _doughKingLive = GetConnectionEnemies("Dough King") ~= nil
-        task.wait(0.05)
-    end
-end)
 
 local function EquipFist()
-    EquipFistDirect()
+    for _, fist in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if string.find(string.lower(fist.Name), "fist") and string.find(string.lower(fist.Name), "darkness") then
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then LocalPlayer.Character.Humanoid:EquipTool(fist); break end
+        end
+    end
 end
 
--- Vị trí Dark Arena (bàn thờ triệu hồi Darkbeard) ở Sea 2
 local DARK_ARENA_CF = CFrame.new(4452.2001953125, 28.60791015625, 4165.89990234375)
 
 local function FindDarkbeardAltar()
     local altarNames = {"DarkbeardAltar", "DarkArena", "Altar", "SummonAltar"}
     for _, v in ipairs(workspace:GetDescendants()) do
         if v:IsA("BasePart") and v:FindFirstChild("TouchInterest") then
-            for _, n in ipairs(altarNames) do
-                if string.find(v.Name, n) then return v end
-            end
+            for _, n in ipairs(altarNames) do if string.find(v.Name, n) then return v end end
         end
     end
     return nil
@@ -846,23 +733,14 @@ end
 local function ActivateFistAtAltar()
     local char = LocalPlayer.Character; if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
-    EquipFist()
-    task.wait(0.2)
-    Teleport(jitterCF(DARK_ARENA_CF))
-    task.wait(0.25)
+    EquipFist(); task.wait(0.2)
+    Teleport(jitterCF(DARK_ARENA_CF)); task.wait(0.25)
     local altar = FindDarkbeardAltar()
     if altar then
         local freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if freshRoot then
-            pcall(function() freshRoot.CFrame = jitterCF(altar.CFrame * CFrame.new(0, 1.5, 0)) end)
-            task.wait(0.1)
-            pcall(function()
-                if firetouchinterest then
-                    firetouchinterest(freshRoot, altar, 0)
-                    task.wait(hrand(0.08, 0.13))
-                    firetouchinterest(freshRoot, altar, 1)
-                end
-            end)
+            pcall(function() freshRoot.CFrame = jitterCF(altar.CFrame * CFrame.new(0, 1.5, 0)) end); task.wait(0.1)
+            pcall(function() if firetouchinterest then firetouchinterest(freshRoot, altar, 0); task.wait(hrand(0.08, 0.13)); firetouchinterest(freshRoot, altar, 1) end end)
         end
     end
     pcall(function() RS.Remotes.CommF_:InvokeServer("DarkBeardAltar") end)
@@ -871,44 +749,25 @@ end
 
 local function GetDarkbeard()
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
-        if folder then
-            for _, enemy in ipairs(folder:GetChildren()) do
-                if string.find(enemy.Name, "Darkbeard") then return enemy end
-            end
-        end
+        if folder then for _, enemy in ipairs(folder:GetChildren()) do if string.find(enemy.Name, "Darkbeard") then return enemy end end end
     end
     return nil
 end
 
--- Dodge offsets để nhảy cóc quanh boss
 local lastDodge   = 0
 local dodgeIndex  = 1
-local dodgeOffsets = {
-    CFrame.new(0,  30,  25),
-    CFrame.new(25, 30,  0),
-    CFrame.new(-25,30,  0),
-    CFrame.new(0,  30, -25),
-}
+local dodgeOffsets = { CFrame.new(0, 30, 25), CFrame.new(25, 30, 0), CFrame.new(-25,30, 0), CFrame.new(0, 30, -25) }
 
--- Bay lên đầu boss + để Fast Attack core tự đánh
 local function PositionOnBoss(boss)
     local root = boss:FindFirstChild("HumanoidRootPart")
     local hum  = boss:FindFirstChild("Humanoid")
     if not root or not hum or hum.Health <= 0 then return end
-    local char = LocalPlayer.Character
-    if not char then return end
-    local plrRoot = char:FindFirstChild("HumanoidRootPart")
-    if not plrRoot then return end
+    local char = LocalPlayer.Character; if not char then return end
+    local plrRoot = char:FindFirstChild("HumanoidRootPart"); if not plrRoot then return end
     if RandomCFrame then
-        -- Humanize: dodge timing không cố định 0.5s
-        if tick() - lastDodge >= hrand(0.4, 0.7) then
-            dodgeIndex = dodgeIndex % #dodgeOffsets + 1
-            lastDodge = tick()
-        end
+        if tick() - lastDodge >= hrand(0.4, 0.7) then dodgeIndex = dodgeIndex % #dodgeOffsets + 1; lastDodge = tick() end
         local targetPos = (root.CFrame * dodgeOffsets[dodgeIndex]).Position
-        -- Thêm jitter nhỏ vào vị trí đứng để không đứng y hệt mỗi lần
-        local jx = (math.random() - 0.5) * 3
-        local jz = (math.random() - 0.5) * 3
+        local jx = (math.random() - 0.5) * 3; local jz = (math.random() - 0.5) * 3
         plrRoot.CFrame = CFrame.new(targetPos + Vector3.new(jx, 0, jz), root.Position)
     else
         local targetPos = (root.CFrame * CFrame.new(0, 15, 0)).Position
@@ -917,26 +776,11 @@ local function PositionOnBoss(boss)
 end
 
 -- ==========================================
--- [9] LOGIC DOUGH KING FULL CHAIN
+-- [10] LOGIC DOUGH KING FULL CHAIN
 -- ==========================================
---[[
-  Flow:
-  1. Chưa có God's Chalice / Sweet Chalice → skip, về farm Chest chờ nhặt từ rương
-  2. Thiếu Conjured Cocoa (<10) → farm Cocoa Warrior / Chocolate Bar Battler
-  3. Có God's Chalice + ≥10 Cocoa → invoke SweetChaliceNpc (craft Sweet Chalice)
-  4. Spawn Dough King bằng Sweet Chalice (CakePrinceSpawner)
-  5. Chưa có RedDoor → invoke CakeScientist + RaidsNpc mở dungeon (cần Red Key)
-  6. Có RedDoor + có Red Key → tele đến cửa, equip Red Key mở
-  7. Dough King spawn → bay lên đầu đánh (Fast Attack core xử lý)
-  8. Lặp lại từ bước 3
-]]
-
 local DOUGH_WAIT_POS  = CFrame.new(-1943.676513671875, 251.5095672607422, -12337.880859375)
 local COCOA_FARM_POS  = CFrame.new(402.7189025878906, 81.06050109863281, -12259.54296875)
-local RED_DOOR_CF     = CFrame.new(-2681.97998, 64.3921585, -12853.7363,
-    0.149007782, -1.87902192e-08, 0.98883605,
-    3.60619588e-08, 1, 1.35681812e-08,
-   -0.98883605, 3.36376011e-08, 0.149007782)
+local RED_DOOR_CF     = CFrame.new(-2681.97998, 64.3921585, -12853.7363, 0.149007782, -1.87902192e-08, 0.98883605, 3.60619588e-08, 1, 1.35681812e-08, -0.98883605, 3.36376011e-08, 0.149007782)
 
 local function RunDoughKingChain()
     local char = LocalPlayer.Character; if not char then return end
@@ -945,7 +789,6 @@ local function RunDoughKingChain()
     local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
     local doughKing  = GetConnectionEnemies("Dough King")
 
-    -- Bước 1: Không có chalice VÀ không có boss → về farm Chest
     if not hasChalice and not doughKing then
         _G.IsAttackingBoss = false
         StatusLabel.Text = "Dough King: Chưa có God's Chalice, farm Chest chờ..."
@@ -953,7 +796,6 @@ local function RunDoughKingChain()
         return
     end
 
-    -- Bước 7 (ưu tiên cao): boss đã spawn → đánh ngay
     if doughKing then
         StatusLabel.Text = "Dough King: Đang đánh Boss!!!"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 200)
@@ -962,46 +804,38 @@ local function RunDoughKingChain()
         return
     end
 
-    -- Bước 2: Cần Conjured Cocoa ≥ 10 để craft
     local cocoaCount = GetM("Conjured Cocoa")
     if cocoaCount < 10 and not GetBP("Sweet Chalice") then
         local cocoaMob = GetConnectionEnemies({"Cocoa Warrior", "Chocolate Bar Battler"})
         if cocoaMob then
             StatusLabel.Text = string.format("Dough King: Farm Cocoa (%d/10)...", cocoaCount)
             StatusLabel.TextColor3 = Color3.fromRGB(210, 105, 30)
-            _G.IsAttackingBoss = true
-            PositionOnBoss(cocoaMob)
+            _G.IsAttackingBoss = true; PositionOnBoss(cocoaMob)
         else
-            _G.IsAttackingBoss = false
-            Teleport(COCOA_FARM_POS)
+            _G.IsAttackingBoss = false; Teleport(COCOA_FARM_POS)
         end
         return
     end
 
-    -- Bước 3: Craft Sweet Chalice
     if GetBP("God's Chalice") and cocoaCount >= 10 then
         StatusLabel.Text = "Dough King: Đang craft Sweet Chalice..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
         replicated.Remotes.CommF_:InvokeServer("SweetChaliceNpc")
-        task.wait(1)
-        return
+        task.wait(1); return
     end
 
-    -- Bước 4: Spawn Dough King bằng Sweet Chalice
     if GetBP("Sweet Chalice") then
         StatusLabel.Text = "Dough King: Đang spawn boss..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
         replicated.Remotes.CommF_:InvokeServer("CakePrinceSpawner", true)
         local deadline = tick() + 10
-        while tick() < deadline do
+        while tick() < deadline and getgenv().NemoRunning do
             task.wait(0.5)
-            if GetConnectionEnemies("Dough King") then break end
-            if GetBP("God's Chalice") then break end
+            if GetConnectionEnemies("Dough King") or GetBP("God's Chalice") then break end
         end
         return
     end
 
-    -- Bước 5: Mở dungeon nếu chưa có RedDoor
     local cakeLoaf = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("CakeLoaf")
     if cakeLoaf and not cakeLoaf:FindFirstChild("RedDoor") then
         if GetBP("Red Key") then
@@ -1014,76 +848,50 @@ local function RunDoughKingChain()
         return
     end
 
-    -- Bước 6: Có RedDoor → tele vào dùng Red Key
     if cakeLoaf and cakeLoaf:FindFirstChild("RedDoor") and GetBP("Red Key") then
         local dist = (plrRoot.CFrame.Position - RED_DOOR_CF.Position).Magnitude
         if dist > 5 then
             StatusLabel.Text = "Dough King: Đang vào cửa đỏ..."
             StatusLabel.TextColor3 = Color3.fromRGB(200, 50, 50)
-            Teleport(RED_DOOR_CF)
-            return
+            Teleport(RED_DOOR_CF); return
         else
-            EquipWeapon("Red Key")
-            task.wait(0.5)
-            return
+            EquipWeapon("Red Key"); task.wait(0.5); return
         end
     end
 
-    -- Không có gì để làm → chờ ngắn, break sớm nếu có event
     _G.IsAttackingBoss = false
     StatusLabel.Text = "Dough King: Chờ boss spawn..."
     StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
     Teleport(DOUGH_WAIT_POS)
     local waitEnd = tick() + 1
-    while tick() < waitEnd do
+    while tick() < waitEnd and getgenv().NemoRunning do
         task.wait(0.3)
-        if GetConnectionEnemies("Dough King") then break end
-        if GetBP("God's Chalice") then break end
+        if GetConnectionEnemies("Dough King") or GetBP("God's Chalice") then break end
     end
 end
 
--- [10] LOGIC RƯƠNG & SERVER HOP
+-- ==========================================
+-- [11] LOGIC RƯƠNG & SERVER HOP
+-- ==========================================
+local function DistanceFromPlrSort(ObjectList)
+    local RootPart = getCharacter():WaitForChild("HumanoidRootPart")
+    table.sort(ObjectList, function(A, B) return (RootPart.Position - A.Position).Magnitude < (RootPart.Position - B.Position).Magnitude end)
+end
 
 local function getChestsSorted()
-    -- Scan lần đầu
-    if FirstRun then
-        FirstRun = false
-        for _, Object in ipairs(workspace:GetDescendants()) do
-            if Object:IsA("Part") and Object.Name:find("Chest") then
-                table.insert(UncheckedChests, Object)
-            end
-        end
-        _chestsDirty = true
-    end
-
-    -- Chỉ rebuild cleaned list khi có rương mới thêm/bị destroy (dirty flag)
-    -- Tránh tạo bảng mới mỗi 0.05s khi list không đổi
+    if FirstRun then FirstRun = false; for _, Object in ipairs(workspace:GetDescendants()) do if Object:IsA("Part") and Object.Name:find("Chest") then table.insert(UncheckedChests, Object) end end; _chestsDirty = true end
     if _chestsDirty then
-        _chestsDirty = false
-        local cleaned = {}
-        for _, Chest in ipairs(UncheckedChests) do
-            if Chest and Chest.Parent then
-                table.insert(cleaned, Chest)
-            end
-        end
+        _chestsDirty = false; local cleaned = {}
+        for _, Chest in ipairs(UncheckedChests) do if Chest and Chest.Parent then table.insert(cleaned, Chest) end end
         UncheckedChests = cleaned
     end
-
-    local now = tick()
-    local char = LocalPlayer.Character
-    local RootPart = char and char:FindFirstChild("HumanoidRootPart")
-
-    local Chests = {}
+    local now = tick(); local char = LocalPlayer.Character; local RootPart = char and char:FindFirstChild("HumanoidRootPart"); local Chests = {}
     for _, Chest in ipairs(UncheckedChests) do
         if Chest:IsA("BasePart") and Chest:FindFirstChild("TouchInterest") then
             local lastTouched = IgnoredChests[Chest]
-            if not lastTouched or (now - lastTouched > CHEST_IGNORE_TIME) then
-                table.insert(Chests, Chest)
-            end
+            if not lastTouched or (now - lastTouched > CHEST_IGNORE_TIME) then table.insert(Chests, Chest) end
         end
     end
-
-    -- Sort dùng dot product thay Magnitude (tránh sqrt, nhanh hơn ~30%)
     if RootPart then
         local rx, ry, rz = RootPart.Position.X, RootPart.Position.Y, RootPart.Position.Z
         table.sort(Chests, function(A, B)
@@ -1098,188 +906,103 @@ end
 local function HopServer()
     StatusLabel.Text = "Status: Đang tìm server ngon..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-
-    -- Fetch 1 trang server, trả về data + nextPageCursor
     local function fetchPage(cursor)
-        local url = "https://games.roblox.com/v1/games/" .. PlaceId
-            .. "/servers/Public?sortOrder=Desc&limit=100"
-            .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
-        local ok, res = pcall(function()
-            return HttpService:JSONDecode(game:HttpGet(url))
-        end)
-        if ok and res and res.data then
-            return res.data, res.nextPageCursor
-        end
+        local url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100" .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
+        local ok, res = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
+        if ok and res and res.data then return res.data, res.nextPageCursor end
         return nil, nil
     end
-
-    -- Lấy 2 trang (~200 server) gần như ngay lập tức
-    local allServers = {}
-    local page1, cur2 = fetchPage("")
-    if page1 then
-        for _, s in ipairs(page1) do table.insert(allServers, s) end
-    end
-    if cur2 then
-        local page2, _ = fetchPage(cur2)
-        if page2 then
-            for _, s in ipairs(page2) do table.insert(allServers, s) end
-        end
-    end
-
-    -- Lọc: chưa thăm hoặc đã hết cooldown, có người, còn ít nhất 2 slot trống
+    local allServers = {}; local page1, cur2 = fetchPage("")
+    if page1 then for _, s in ipairs(page1) do table.insert(allServers, s) end end
+    if cur2 then local page2, _ = fetchPage(cur2); if page2 then for _, s in ipairs(page2) do table.insert(allServers, s) end end end
     local validServers = {}
     for _, Server in ipairs(allServers) do
-        local playing   = Server.playing or 0
-        local maxP      = Server.maxPlayers or 0
-        local freeSlots = maxP - playing
-        if playing > 0
-            and freeSlots >= 2
-            and not isServerCoolingDown(Server.id)
-        then
-            table.insert(validServers, Server)
-        end
+        local playing = Server.playing or 0; local maxP = Server.maxPlayers or 0; local freeSlots = maxP - playing
+        if playing > 0 and freeSlots >= 2 and not isServerCoolingDown(Server.id) then table.insert(validServers, Server) end
     end
-
-    -- Sort: nhiều người nhất (server đông = nhiều chest/boss hơn)
-    table.sort(validServers, function(a, b)
-        return (a.playing or 0) > (b.playing or 0)
-    end)
-
+    table.sort(validServers, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
     if #validServers > 0 then
         local best = validServers[1]
-        StatusLabel.Text = string.format(
-            "Status: Hop → server %d/%d người",
-            best.playing, best.maxPlayers
-        )
+        StatusLabel.Text = string.format("Status: Hop → server %d/%d người", best.playing, best.maxPlayers)
         StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-        -- Ghi server hiện tại vào blacklist trước khi rời
         VisitedServers[game.JobId] = os.time()
-        pcall(function()
-            if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end
-        end)
-        task.wait(0.1)
+        pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end); task.wait(0.1)
         TeleportService:TeleportToPlaceInstance(PlaceId, best.id, LocalPlayer)
         return
     end
-
-    -- Không còn server mới → xóa các server đã hết cooldown rồi hop lại
     StatusLabel.Text = "Status: Dọn cache server cũ, hop lại..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
     local now = os.time()
-    for jobId, t in pairs(VisitedServers) do
-        if (now - t) >= SERVER_COOLDOWN then
-            VisitedServers[jobId] = nil
-        end
-    end
-    pcall(function()
-        if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end
-    end)
-    task.wait(0.5)
+    for jobId, t in pairs(VisitedServers) do if (now - t) >= SERVER_COOLDOWN then VisitedServers[jobId] = nil end end
+    pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end); task.wait(0.5)
     TeleportService:Teleport(PlaceId, LocalPlayer)
 end
 
 -- ==========================================
--- [11] VÒNG LẶP CHÍNH
+-- [12] VÒNG LẶP CHÍNH (MAIN)
 -- ==========================================
 local SEA2_PLACE = 4442274612
 local SEA3_PLACE = 7449423635
 
--- Fallback: nhảy + dịch chuyển vật lý vào rương khi firetouchinterest thất bại
 local function jumpIntoChest(RootPart, Chest, maxAttempts)
     maxAttempts = maxAttempts or 4
-
     for attempt = 1, maxAttempts do
-        if not Chest or not Chest.Parent then return end
-        -- Refresh char/hum/RootPart mỗi attempt phòng respawn giữa chừng
+        if not Chest or not Chest.Parent or not getgenv().NemoRunning then return end
         local char = LocalPlayer.Character
         local hum  = char and char:FindFirstChildOfClass("Humanoid")
         local root = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or hum.Health <= 0 or not root then return end
-
-        local angle        = (attempt - 1) * (math.pi * 2 / maxAttempts) + math.random() * 0.3
+        local angle = (attempt - 1) * (math.pi * 2 / maxAttempts) + math.random() * 0.3
         local approachDist = hrand(1.5, 2.5)
-        root.CFrame        = Chest.CFrame * CFrame.new(math.cos(angle) * approachDist, 1.5, math.sin(angle) * approachDist)
+        root.CFrame = Chest.CFrame * CFrame.new(math.cos(angle) * approachDist, 1.5, math.sin(angle) * approachDist)
         RunService.Heartbeat:Wait()
-
         hum.Jump = true
-        pcall(function()
-            root.AssemblyLinearVelocity = (Chest.Position - root.Position).Unit * 28
-        end)
-        task.wait(0.06)
+        pcall(function() root.AssemblyLinearVelocity = (Chest.Position - root.Position).Unit * 28 end); task.wait(0.06)
         root.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
-
-        pcall(function()
-            if firetouchinterest then
-                firetouchinterest(root, Chest, 0)
-                task.wait(hrand(0.06, 0.10))
-                firetouchinterest(root, Chest, 1)
-            end
-        end)
+        pcall(function() if firetouchinterest then firetouchinterest(root, Chest, 0); task.wait(hrand(0.06, 0.10)); firetouchinterest(root, Chest, 1) end end)
         if not Chest or not Chest.Parent then return end
     end
 end
 
--- Touch chest: fire xong sang rương tiếp theo ngay, không chờ rương biến mất
 local function TouchChest(RootPart, Chest)
     RootPart.CFrame = jitterCF(Chest.CFrame * CFrame.new(0, 0.5, 0))
-
     local fired = false
     pcall(function()
         if firetouchinterest then
             firetouchinterest(RootPart, Chest, 0)
-            task.wait(hrand(0.07, 0.11))
+            -- ANTI-GHOST TOUCH: Bắt buộc dừng một chút xíu để nhận tiền
+            task.wait(hrand(0.1, 0.15)) 
             firetouchinterest(RootPart, Chest, 1)
             fired = true
         end
     end)
-
-    -- Nếu không có firetouchinterest thì dùng jump fallback
-    if not fired then
-        jumpIntoChest(RootPart, Chest)
-    end
+    if not fired then jumpIntoChest(RootPart, Chest) end
 end
 
 local function GrabFruit(RootPart, fruit)
     local handle = fruit:FindFirstChild("Handle")
     if not handle then return end
     local targetCF = jitterCF(handle.CFrame, 0.3)
-    Teleport(targetCF)  -- InstantTP tự set CFrame, non-instant tự di chuyển
-    -- Refresh RootPart sau Teleport phòng respawn giữa chừng (non-instant mode)
+    Teleport(targetCF)
     local freshChar = LocalPlayer.Character
     local freshRoot = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
     if not freshRoot then return end
-    pcall(function()
-        if firetouchinterest then
-            firetouchinterest(freshRoot, handle, 0)
-            task.wait(hrand(0.08, 0.15))
-            firetouchinterest(freshRoot, handle, 1)
-        end
-    end)
+    pcall(function() if firetouchinterest then firetouchinterest(freshRoot, handle, 0); task.wait(hrand(0.08, 0.15)); firetouchinterest(freshRoot, handle, 1) end end)
     task.wait(hrand(0.4, 0.7))
     StoreFruit()
 end
 
--- Kiểm tra ngắt giữa chest loop
 local function ShouldBreakChest()
     if CollectFruit and #GetDroppedFruits() > 0 then return true end
-    if AutoDoughKing and PlaceId == SEA3_PLACE then
-        -- Đọc từ flag (background thread 0.05s) để break tức thì
-        if _hasChalice or _doughKingLive then return true end
-    end
-    if AutoDarkbeard and PlaceId == SEA2_PLACE then
-        -- Đọc từ flag (background thread 0.05s) để break tức thì
-        if HasFistOfDarkness() or GetDarkbeard() then return true end
-    end
+    if AutoDoughKing and PlaceId == SEA3_PLACE then if GetBP("God's Chalice") or GetBP("Sweet Chalice") or GetConnectionEnemies("Dough King") then return true end end
+    if AutoDarkbeard and PlaceId == SEA2_PLACE then if HasFistOfDarkness() or GetDarkbeard() then return true end end
     return false
 end
 
 local function main()
     AutoSelectTeam()
 
-    while true do
-        -- Dừng thủ công qua nút STOP trên UI
-        if _farmStopped then task.wait(0.5); continue end
-
+    while getgenv().NemoRunning do
         local char = LocalPlayer.Character
         local RootPart = char and char:FindFirstChild("HumanoidRootPart")
         if not RootPart then task.wait(1); continue end
@@ -1291,20 +1014,15 @@ local function main()
                 _G.IsAttackingBoss = false
                 StatusLabel.Text = "Status: Phát hiện Trái! Đang lụm..."
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
-                GrabFruit(RootPart, fruits[1])
-                task.wait(0.3)
-                continue
+                GrabFruit(RootPart, fruits[1]); task.wait(0.3); continue
             end
         end
 
         -- [ƯU TIÊN 2] Dough King (Sea 3)
         if AutoDoughKing and PlaceId == SEA3_PLACE then
-            -- Dùng flag từ background poller (detect tức thì)
-            if _hasChalice or _doughKingLive then
-                RunDoughKingChain()
-                task.wait(0.05)
-                continue
-            end
+            local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
+            local doughKingActive = GetConnectionEnemies("Dough King") ~= nil
+            if hasChalice or doughKingActive then RunDoughKingChain(); task.wait(0.05); continue end
         end
 
         -- [ƯU TIÊN 3] Darkbeard (Sea 2)
@@ -1314,28 +1032,26 @@ local function main()
                 _G.IsAttackingBoss = true
                 StatusLabel.Text = "Status: Đánh Darkbeard!!!"
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-                PositionOnBoss(darkbeard)
-                task.wait(0.05)
-                continue
+                PositionOnBoss(darkbeard); task.wait(0.05); continue
             elseif HasFistOfDarkness() then
                 _G.IsAttackingBoss = false
-                StatusLabel.Text = "Status: Đang dùng Fist tại Dark Arena..."
+                StatusLabel.Text = "Status: Chờ Server Cooldown (Bảo vệ Key)..."
                 StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
                 ActivateFistAtAltar()
                 local deadline = tick() + 8
-                while tick() < deadline do
+                while tick() < deadline and getgenv().NemoRunning do
                     task.wait(0.5)
-                    if GetDarkbeard() then break end
-                    if not HasFistOfDarkness() then break end
+                    if GetDarkbeard() or not HasFistOfDarkness() then break end
+                    -- Liên tục nhảy để chống bị kick khi đứng chờ Boss
+                    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+                    if hum then hum.Jump = true end
                 end
                 continue
             end
         end
 
         -- [ƯU TIÊN 4] Auto Chest
-        -- Guard: có thể ShouldBreakChest đúng ngay đây nếu item vừa xuất hiện
         if ShouldBreakChest() then task.wait(); continue end
-
         _G.IsAttackingBoss = false
         StatusLabel.Text = "Status: Auto Chest (Instant)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1345,39 +1061,30 @@ local function main()
             StatusLabel.Text = "Status: Không có rương, chờ 3s rồi hop..."
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
             local antiKickEnd = tick() + 3
-            while tick() < antiKickEnd do
+            while tick() < antiKickEnd and getgenv().NemoRunning do
                 if ShouldBreakChest() then break end
-                pcall(function()
-                    VirtualUser:CaptureController()
-                    VirtualUser:ClickButton2(Vector2.new(
-                        math.random(200, 600), math.random(200, 500)
-                    ))
-                end)
+                pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(200, 600), math.random(200, 500))) end)
                 task.wait(0.8)
             end
-            -- Kiểm tra lần cuối trước khi hop
-            if ShouldBreakChest() then task.wait(); continue end
-            HopServer()
-            task.wait(3)
-            continue
+            if ShouldBreakChest() or not getgenv().NemoRunning then task.wait(); continue end
+            HopServer(); task.wait(3); continue
         end
 
         for _, Chest in ipairs(Chests) do
-            if _farmStopped or ShouldBreakChest() then break end
-            char = LocalPlayer.Character
-            RootPart = char and char:FindFirstChild("HumanoidRootPart")
+            if not getgenv().NemoRunning then break end
+            if ShouldBreakChest() then break end
+            char = LocalPlayer.Character; RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
             if Chest and Chest.Parent and Chest:FindFirstChild("TouchInterest") then
                 TouchChest(RootPart, Chest)
                 IgnoredChests[Chest] = tick()
-                -- Yield 0.15s để server kịp trả item về Backpack trước khi check lại
                 task.wait(0.15)
-                if _farmStopped or ShouldBreakChest() then break end
+                if ShouldBreakChest() then break end
             end
         end
-
         task.wait()
     end
 end
 
+-- Khởi động Main Loop
 main()
