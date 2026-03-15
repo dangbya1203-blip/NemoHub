@@ -1197,17 +1197,22 @@ local function main()
 
         local Chests = getChestsSorted()
         if #Chests == 0 then
-            -- Chờ tối đa 6 giây để rương mới spawn/respawn.
-            -- Tránh hop ngay khi server vừa join mà map chưa load xong.
-            StatusLabel.Text = "Status: Không có rương, chờ spawn (6s)..."
+            -- Không có rương: giả lập hoạt động 3s (anti-kick) rồi hop ngay.
+            -- Không tele trong lúc chờ — tele khi không có rương sẽ bị kick.
+            StatusLabel.Text = "Status: Không có rương, chờ 3s rồi hop..."
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-            local waitDeadline = tick() + 6
-            repeat task.wait(0.2) until #getChestsSorted() > 0 or tick() >= waitDeadline
-            if #getChestsSorted() == 0 then
-                HopServer()
-                break
+            local antiKickEnd = tick() + 3
+            while tick() < antiKickEnd do
+                pcall(function()
+                    VirtualUser:CaptureController()
+                    VirtualUser:ClickButton2(Vector2.new(
+                        math.random(200, 600), math.random(200, 500)
+                    ))
+                end)
+                task.wait(0.8)
             end
-            continue
+            HopServer()
+            break
         end
 
         for _, Chest in ipairs(Chests) do
