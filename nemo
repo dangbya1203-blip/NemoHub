@@ -24,7 +24,7 @@ end
 if not _keyValid then
     task.spawn(function()
         while true do
-            warn("[NemoHub] ❌ Key không hợp lệ: '" .. _key .. "'")
+            warn("[NemoHub] Key không hợp lệ: '" .. _key .. "'")
             task.wait(5)
         end
     end)
@@ -568,7 +568,6 @@ end)
 -- [6] HÀM XỬ LÝ NHÂN VẬT
 -- ==========================================
 local function AutoSelectTeam()
-    -- Kiểm tra đã vào team thật chưa (không phải Neutral)
     local function hasRealTeam()
         if LocalPlayer:FindFirstChild("Main") then return true end
         local t = LocalPlayer.Team
@@ -580,19 +579,26 @@ local function AutoSelectTeam()
     local teamName  = JoinTeam  -- "Pirates" hoặc "Marines"
 
     local function trySelectTeam()
-        -- Cách 1: CommF_ InvokeServer trực tiếp (không cần UI)
+        -- Cách 1: SetTeam (tên remote đúng hiện tại) + guard ChooseTeam.Visible
+        pcall(function()
+            local mainMinimal = PlayerGui:FindFirstChild("Main (minimal)")
+            local chooseTeam  = mainMinimal and mainMinimal:FindFirstChild("ChooseTeam")
+            if chooseTeam and chooseTeam.Visible then
+                RS.Remotes.CommF_:InvokeServer("SetTeam", teamName)
+            end
+        end)
+
+        -- Cách 2: SelectTeam fallback (server version cũ)
         pcall(function()
             RS.Remotes.CommF_:InvokeServer("SelectTeam", teamName)
         end)
 
-        -- Cách 2: getconnections vào button Activated
+        -- Cách 3: getconnections vào button Activated
         pcall(function()
             local mainMinimal = PlayerGui:FindFirstChild("Main (minimal)")
             if not mainMinimal then return end
             local chooseTeam = mainMinimal:FindFirstChild("ChooseTeam", true)
-            if not chooseTeam then return end
-
-            -- Tìm button theo tên phe, duyệt toàn bộ descendants để không lệ thuộc path cứng
+            if not chooseTeam or not chooseTeam.Visible then return end
             local button
             for _, obj in ipairs(chooseTeam:GetDescendants()) do
                 if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
@@ -602,14 +608,12 @@ local function AutoSelectTeam()
                     button = obj; break
                 end
             end
-
             if button then
                 if getconnections then
                     for _, conn in ipairs(getconnections(button.Activated)) do
                         pcall(conn.Function)
                     end
                 else
-                    -- Fallback: fire MouseButton1Click
                     local vim = game:GetService("VirtualInputManager")
                     local pos = button.AbsolutePosition + button.AbsoluteSize / 2
                     vim:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
