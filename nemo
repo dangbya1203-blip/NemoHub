@@ -469,12 +469,10 @@ local function executeHitRegistration()
         if wType ~= "Melee" and wType ~= "Sword" then return end
 
         local Modules = RS:FindFirstChild("Modules"); local Net2 = Modules and Modules:FindFirstChild("Net"); if not Net2 then return end
-        -- Cache seed 2s để tránh spam InvokeServer mỗi 0.1s khi đang đánh boss
         local seed = _seedCache.value
         if tick() - _seedCache.time > 2 then
             pcall(function() seed = Net2.seed:InvokeServer() end)
-            _seedCache.value = seed
-            _seedCache.time  = tick()
+            _seedCache.value = seed; _seedCache.time = tick()
         end
         local attackRemote2 = Net2:FindFirstChild("RE/RegisterAttack")
         local hitRemote2    = Net2:FindFirstChild("RE/RegisterHit")
@@ -747,48 +745,55 @@ end
 -- [8] LOGIC DARKBEARD
 -- ==========================================
 
--- Fist of Darkness là Tool tạm thời (KHÔNG lưu được inventory, mất khi die/disconnect).
--- Dùng ChildAdded để detect tức thì ngay khi rương trả về Tool, không cần poll.
+-- Fist of Darkness là Tool tạm thời (mất khi die/disconnect, không lưu inventory).
+-- Dùng ChildAdded để detect tức thì, không poll mỗi frame.
 local _fistFlag = false
 
--- Seed flag từ character hiện tại (nếu script start sau khi char đã load)
-local function _seedFistFlagFromChar(char)
-    if char and char:FindFirstChild("Fist of Darkness") then _fistFlag = true end
-    if char then
-        char.ChildAdded:Connect(function(child)
-            if child.Name == "Fist of Darkness" then _fistFlag = true end
-        end)
-        char.ChildRemoved:Connect(function(child)
-            if child.Name == "Fist of Darkness" then
-                _fistFlag = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") ~= nil
-            end
-        end)
-    end
+local function _seedFistFlag()
+    -- Seed từ cả Backpack VÀ Character ngay khi script start,
+    -- phòng trường hợp Fist đã có trước khi ChildAdded listener được attach.
+    if LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") then _fistFlag = true end
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Fist of Darkness") then _fistFlag = true end
+end
+
+local function _attachFistListeners(char)
+    if not char then return end
+    char.ChildAdded:Connect(function(child)
+        if child.Name == "Fist of Darkness" then
+            _fistFlag = true
+            warn("[NemoHub] Fist detected in Character! PlaceId=" .. tostring(game.PlaceId))
+        end
+    end)
+    char.ChildRemoved:Connect(function(child)
+        if child.Name == "Fist of Darkness" then
+            _fistFlag = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") ~= nil
+        end
+    end)
 end
 
 LocalPlayer.Backpack.ChildAdded:Connect(function(child)
-    if child.Name == "Fist of Darkness" then _fistFlag = true end
+    if child.Name == "Fist of Darkness" then
+        _fistFlag = true
+        warn("[NemoHub] Fist detected in Backpack! PlaceId=" .. tostring(game.PlaceId))
+    end
 end)
 LocalPlayer.Backpack.ChildRemoved:Connect(function(child)
     if child.Name == "Fist of Darkness" then
         _fistFlag = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Fist of Darkness")) ~= nil
     end
 end)
-
--- Fist mất hoàn toàn khi chết → clear flag tức thì khi character bị remove
+-- Fist mất khi chết → clear flag ngay
 LocalPlayer.CharacterRemoving:Connect(function()
     _fistFlag = false
 end)
 LocalPlayer.CharacterAdded:Connect(function(char)
-    _seedFistFlagFromChar(char)
+    _attachFistListeners(char)
 end)
-
--- Seed cho character đang hiện tại ngay khi script chạy
-_seedFistFlagFromChar(LocalPlayer.Character)
+-- Seed ngay khi script chạy
+_seedFistFlag()
+_attachFistListeners(LocalPlayer.Character)
 
 local function HasFistOfDarkness()
-    -- Fist là Tool trong Backpack/Character, KHÔNG phải Material trong server inventory.
-    -- Dùng flag (cập nhật qua ChildAdded) + fallback GetBP để chắc chắn không miss.
     if _fistFlag then return true end
     local bp = GetBP("Fist of Darkness")
     if bp then _fistFlag = true; return true end
@@ -800,13 +805,11 @@ local function EquipFist()
     if fist and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
         LocalPlayer.Character.Humanoid:EquipTool(fist)
     end
-    -- Nếu Fist đã ở Character (đã equip) thì không cần làm gì
 end
 
 -- Vị trí Dark Arena (bàn thờ triệu hồi Darkbeard) ở Sea 2
 local DARK_ARENA_CF = CFrame.new(4452.2001953125, 28.60791015625, 4165.89990234375)
 
--- Tìm Part bàn thờ trong workspace (tên thường gặp trong Blox Fruits)
 local function FindDarkbeardAltar()
     local altarNames = {"DarkbeardAltar", "DarkArena", "Altar", "SummonAltar"}
     for _, v in ipairs(workspace:GetDescendants()) do
@@ -819,27 +822,18 @@ local function FindDarkbeardAltar()
     return nil
 end
 
--- Kích hoạt Fist tại Dark Arena để triệu hồi Darkbeard.
--- Thử cả firetouchinterest + remote invocation để đảm bảo hoạt động.
 local function ActivateFistAtAltar()
     local char = LocalPlayer.Character; if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
-
     EquipFist()
     task.wait(0.2)
-
-    -- Bước 1: Tele đến Dark Arena
     Teleport(jitterCF(DARK_ARENA_CF))
     task.wait(0.25)
-
-    -- Bước 2: firetouchinterest lên altar Part nếu tìm được
     local altar = FindDarkbeardAltar()
     if altar then
         local freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if freshRoot then
-            pcall(function()
-                freshRoot.CFrame = jitterCF(altar.CFrame * CFrame.new(0, 1.5, 0))
-            end)
+            pcall(function() freshRoot.CFrame = jitterCF(altar.CFrame * CFrame.new(0, 1.5, 0)) end)
             task.wait(0.1)
             pcall(function()
                 if firetouchinterest then
@@ -850,8 +844,6 @@ local function ActivateFistAtAltar()
             end)
         end
     end
-
-    -- Bước 3: Remote invocation (dự phòng, tên remote thực tế trong Blox Fruits)
     pcall(function() RS.Remotes.CommF_:InvokeServer("DarkBeardAltar") end)
     pcall(function() RS.Remotes.CommF_:InvokeServer("DarkArena") end)
 end
@@ -929,17 +921,18 @@ local function RunDoughKingChain()
     local char = LocalPlayer.Character; if not char then return end
     local plrRoot = char:FindFirstChild("HumanoidRootPart"); if not plrRoot then return end
 
-    -- Bước 1: Chưa có Chalice VÀ không có boss active → về Chest farm
     local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
     local doughKing  = GetConnectionEnemies("Dough King")
+
+    -- Bước 1: Không có chalice VÀ không có boss → về farm Chest
     if not hasChalice and not doughKing then
         _G.IsAttackingBoss = false
         StatusLabel.Text = "Dough King: Chưa có God's Chalice, farm Chest chờ..."
         StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-        return  -- trả về main loop → xuống Auto Chest
+        return
     end
 
-    -- Bước 7 (ưu tiên cao): Dough King đã spawn → đánh ngay, bất kể chalice còn hay không
+    -- Bước 7 (ưu tiên cao): boss đã spawn → đánh ngay
     if doughKing then
         StatusLabel.Text = "Dough King: Đang đánh Boss!!!"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 200)
@@ -964,7 +957,7 @@ local function RunDoughKingChain()
         return
     end
 
-    -- Bước 3: Craft Sweet Chalice từ God's Chalice + Cocoa
+    -- Bước 3: Craft Sweet Chalice
     if GetBP("God's Chalice") and cocoaCount >= 10 then
         StatusLabel.Text = "Dough King: Đang craft Sweet Chalice..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
@@ -974,19 +967,15 @@ local function RunDoughKingChain()
     end
 
     -- Bước 4: Spawn Dough King bằng Sweet Chalice
-    -- Sau khi fire, Sweet Chalice bị consume → hasChalice = false vòng sau
-    -- nhưng main loop sẽ vẫn vào RunDoughKingChain vì doughKingActive = true
     if GetBP("Sweet Chalice") then
         StatusLabel.Text = "Dough King: Đang spawn boss..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
         replicated.Remotes.CommF_:InvokeServer("CakePrinceSpawner", true)
-        -- Chờ boss spawn tối đa 10s, check mỗi 0.5s
-        -- Nếu trong lúc chờ có God's Chalice mới drop → cũng break ra
         local deadline = tick() + 10
         while tick() < deadline do
             task.wait(0.5)
             if GetConnectionEnemies("Dough King") then break end
-            if GetBP("God's Chalice") then break end  -- chalice mới, xử lý vòng sau
+            if GetBP("God's Chalice") then break end
         end
         return
     end
@@ -1019,8 +1008,7 @@ local function RunDoughKingChain()
         end
     end
 
-    -- Không có boss, không có gì để làm → chờ ngắn tại vị trí spawn
-    -- Không wait 1s blind — check God's Chalice drop mỗi 0.3s phòng miss
+    -- Không có gì để làm → chờ ngắn, break sớm nếu có event
     _G.IsAttackingBoss = false
     StatusLabel.Text = "Dough King: Chờ boss spawn..."
     StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
@@ -1254,7 +1242,6 @@ end
 local function ShouldBreakChest()
     if CollectFruit and #GetDroppedFruits() > 0 then return true end
     if AutoDoughKing and PlaceId == SEA3_PLACE then
-        -- Break nếu có chalice để craft, hoặc Dough King đã spawn (cần đánh ngay)
         if GetBP("God's Chalice") or GetBP("Sweet Chalice")
             or GetConnectionEnemies("Dough King") then return true end
     end
@@ -1288,9 +1275,6 @@ local function main()
         -- [ƯU TIÊN 2] Dough King (Sea 3)
         if AutoDoughKing and PlaceId == SEA3_PLACE then
             local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
-            -- Vào chain nếu: có chalice (cần craft/spawn), HOẶC Dough King đã spawn
-            -- (Sweet Chalice bị consume sau CakePrinceSpawner → hasChalice = false
-            --  nhưng boss đã ở đó, phải tiếp tục đánh chứ không farm chest)
             local doughKingActive = GetConnectionEnemies("Dough King") ~= nil
             if hasChalice or doughKingActive then
                 RunDoughKingChain()
@@ -1303,7 +1287,6 @@ local function main()
         if AutoDarkbeard and PlaceId == SEA2_PLACE then
             local darkbeard = GetDarkbeard()
             if darkbeard then
-                -- Boss đã spawn → đánh
                 _G.IsAttackingBoss = true
                 StatusLabel.Text = "Status: Đánh Darkbeard!!!"
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
@@ -1311,17 +1294,14 @@ local function main()
                 task.wait(0.05)
                 continue
             elseif HasFistOfDarkness() then
-                -- Có Fist nhưng boss chưa spawn → kích hoạt tại Dark Arena
                 _G.IsAttackingBoss = false
-                StatusLabel.Text = "Status: Đang dùng Fist of Darkness tại Dark Arena..."
+                StatusLabel.Text = "Status: Đang dùng Fist tại Dark Arena..."
                 StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
                 ActivateFistAtAltar()
-                -- Sau khi activate, chờ boss spawn tối đa 8s rồi recheck
                 local deadline = tick() + 8
                 while tick() < deadline do
                     task.wait(0.5)
                     if GetDarkbeard() then break end
-                    -- Nếu vì lý do gì Fist biến mất (die/disconnect), thoát vòng chờ
                     if not HasFistOfDarkness() then break end
                 end
                 continue
@@ -1329,8 +1309,7 @@ local function main()
         end
 
         -- [ƯU TIÊN 4] Auto Chest
-        -- Guard: nếu ShouldBreakChest đúng ngay tại đây (Fist/Chalice/Darkbeard vừa xuất hiện
-        -- trong lúc đang xử lý priority 1-3 ở trên) thì continue lại từ đầu để priority 3 xử lý.
+        -- Guard: có thể ShouldBreakChest đúng ngay đây nếu item vừa xuất hiện
         if ShouldBreakChest() then task.wait(); continue end
 
         _G.IsAttackingBoss = false
@@ -1343,8 +1322,6 @@ local function main()
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
             local antiKickEnd = tick() + 3
             while tick() < antiKickEnd do
-                -- Trong lúc chờ anti-kick, check Fist mỗi 0.8s.
-                -- Nếu có Fist thì KHÔNG hop — break ra ngoài để main loop xử lý.
                 if ShouldBreakChest() then break end
                 pcall(function()
                     VirtualUser:CaptureController()
@@ -1354,7 +1331,7 @@ local function main()
                 end)
                 task.wait(0.8)
             end
-            -- Kiểm tra lần cuối trước khi hop: nếu vừa nhặt được Fist/Chalice thì không hop
+            -- Kiểm tra lần cuối trước khi hop
             if ShouldBreakChest() then task.wait(); continue end
             HopServer()
             task.wait(3)
@@ -1369,7 +1346,7 @@ local function main()
             if Chest and Chest.Parent and Chest:FindFirstChild("TouchInterest") then
                 TouchChest(RootPart, Chest)
                 IgnoredChests[Chest] = tick()
-                -- Yield 0.15s sau mỗi chest để server kịp trả Fist về Backpack
+                -- Yield 0.15s để server kịp trả item về Backpack trước khi check lại
                 task.wait(0.15)
                 if ShouldBreakChest() then break end
             end
