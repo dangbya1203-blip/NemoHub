@@ -302,185 +302,146 @@ end)
 
 -- ==========================================
 -- [6] FAST ATTACK & HIT REGISTRATION CORE
+-- (Ported từ bancu: pool-based, zero GC, stabilizeMob, BringEnemy Lerp)
 -- ==========================================
 local function isAlive(char) return char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 end
-local RegisterAttack, RegisterHit, HNCHit, HNCAtk, CombatFlags, HitFunction
+local RegisterAttack, RegisterHit, hitRemote, hitRemoteId
+local CachedSeed = 0
 
-task.spawn(function()
-    pcall(function()
-        local Modules = RS:WaitForChild("Modules", 5)
-        if not Modules then return end
-        local NetDir = Modules:WaitForChild("Net", 5)
-        RegisterAttack = NetDir:WaitForChild("RE/RegisterAttack", 5)
-        RegisterHit    = NetDir:WaitForChild("RE/RegisterHit", 5)
-        pcall(function()
-            local NetMod = require(NetDir)
-            if NetMod then
-                HNCHit = NetMod:RemoteEvent("RegisterHit", true)
-                HNCAtk = NetDir["RE/RegisterAttack"]
-            end
-        end)
-        pcall(function()
-            local ok, val = pcall(function() return require(Modules.Flags).COMBAT_REMOTE_THREAD or false end)
-            if ok and val then CombatFlags = val end
-        end)
-        pcall(function()
-            if not getsenv then return end
-            local ps = Player:WaitForChild("PlayerScripts", 5)
-            local ls = ps and ps:FindFirstChildOfClass("LocalScript")
-            if not ls then return end
-            local ok, env = pcall(getsenv, ls)
-            if ok and env and env._G then HitFunction = env._G.SendHitsToServer end
-        end)
-    end)
-end)
-
-local _hitRegData = { remote = nil, remoteId = nil }
+-- Setup remotes
 task.spawn(function()
     pcall(function()
         local Modules = RS:WaitForChild("Modules", 5); if not Modules then return end
-        local foldersToCheck = {}
-        for _, name in ipairs({"Util","Common","Remotes","Assets","FX"}) do pcall(function() table.insert(foldersToCheck, RS:WaitForChild(name, 3)) end) end
+        local Net = Modules:WaitForChild("Net", 5); if not Net then return end
+        RegisterAttack = Net:WaitForChild("RE/RegisterAttack", 5)
+        RegisterHit    = Net:WaitForChild("RE/RegisterHit", 5)
+        -- Scan secondary hitRemote với Id attribute (cloneref pattern)
         local function scanFolder(folder)
             if not folder then return end
-            pcall(function()
-                for _, child in ipairs(folder:GetChildren()) do
-                    if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
-                        _hitRegData.remote = child; _hitRegData.remoteId = child:GetAttribute("Id")
-                    end
+            for _, child in ipairs(folder:GetChildren()) do
+                if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
+                    hitRemote   = child
+                    hitRemoteId = child:GetAttribute("Id")
                 end
-                folder.ChildAdded:Connect(function(child)
-                    if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
-                        _hitRegData.remote = child; _hitRegData.remoteId = child:GetAttribute("Id")
-                    end
-                end)
+            end
+            folder.ChildAdded:Connect(function(child)
+                if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
+                    hitRemote   = child
+                    hitRemoteId = child:GetAttribute("Id")
+                end
             end)
         end
-        for _, f in ipairs(foldersToCheck) do scanFolder(f) end
+        for _, name in ipairs({"Util","Common","Remotes","Assets","FX"}) do
+            pcall(function() scanFolder(RS:WaitForChild(name, 3)) end)
+        end
+        -- Cache seed mỗi 2s
+        while getgenv().NemoRunning do
+            task.wait(2)
+            pcall(function()
+                if Net.seed then CachedSeed = Net.seed:InvokeServer() or 0 end
+            end)
+        end
     end)
 end)
 
-local LIMBS = {"RightLowerArm","RightUpperArm","LeftLowerArm","LeftUpperArm","RightHand","LeftHand"}
+-- stabilizeMob: tắt physics + animation → tiết kiệm FPS khi đánh boss
+local _stabilized = setmetatable({}, {__mode = "k"})
+local function stabilizeMob(mob)
+    if _stabilized[mob] then return end
+    _stabilized[mob] = true
+    pcall(function()
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        local anim = mob:FindFirstChildOfClass("Animator") or mob:FindFirstChild("Animate")
+        if anim then anim:Destroy() end
+        if hum then
+            hum.WalkSpeed = 0
+            hum.JumpPower = 0
+        end
+        for _, part in pairs(mob:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+                part.Massless   = true
+                pcall(function() part:SetNetworkOwner(nil) end)
+            end
+        end
+    end)
+end
 
-local function executeFastAttack(toolTipFilter)
+-- antiKnockback: reset velocity quái sau Lerp
+local function antiKnockback(hrp)
+    pcall(function()
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+-- Pool cố định tránh tạo table mới mỗi 0.05s → không GC pressure
+local _targets  = {}
+local _pool     = {}
+local _poolSize = 300
+for i = 1, _poolSize do _pool[i] = {nil, nil} end
+
+local function executeFastAttack()
     local char = Player.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not char or not root then return end
-    local tool = char:FindFirstChildOfClass("Tool"); if not tool then return end
-    local tip  = tool.ToolTip
-    if toolTipFilter then
-        if tip ~= toolTipFilter then return end
-    else
-        if tip ~= "Melee" and tip ~= "Sword" and tip ~= "Blox Fruit" and tip ~= "Gun" then return end
-    end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool or (tool.ToolTip ~= "Melee" and tool.ToolTip ~= "Sword") then return end
+    if not RegisterAttack or not RegisterHit then return end
 
-    local rootPos = root.Position
-
-    if tip == "Blox Fruit" and tool:FindFirstChild("LeftClickRemote") then
-        local lcr = tool.LeftClickRemote; local hasMob = false
-        for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
-            if folder then
-                for _, enemy in ipairs(folder:GetChildren()) do
-                    local eHRP = enemy:FindFirstChild("HumanoidRootPart")
-                    if eHRP and isAlive(enemy) and not enemy:GetAttribute("IsBoat") and (eHRP.Position - rootPos).Magnitude <= 65 then hasMob = true; break end
-                end
-            end
-            if hasMob then break end
-        end
-        if hasMob then pcall(function() lcr:FireServer(Vector3.new(0.01, -500, 0.01), 1, true); lcr:FireServer(false) end) end
-        return
-    end
-
-    local mainTarget = nil; local targets = {}
+    local count     = 0
+    local firstHead = nil
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
         if folder then
             for _, mob in ipairs(folder:GetChildren()) do
-                if mob ~= char and isAlive(mob) and not mob:GetAttribute("IsBoat") then
+                if mob ~= char then
                     local hrp  = mob:FindFirstChild("HumanoidRootPart")
                     local head = mob:FindFirstChild("Head")
-                    if hrp and head and (hrp.Position - rootPos).Magnitude <= 65 then
-                        if not mainTarget then mainTarget = head end
-                        local hitPart = mob:FindFirstChild(LIMBS[math.random(#LIMBS)]) or hrp
-                        table.insert(targets, {mob, hitPart})
+                    if hrp and head and isAlive(mob) and (hrp.Position - root.Position).Magnitude <= 65 then
+                        if not firstHead then firstHead = head end
+                        for _, part in ipairs(mob:GetChildren()) do
+                            if part:IsA("BasePart") then
+                                count = count + 1
+                                local entry = _pool[count] or {nil, nil}
+                                _pool[count] = entry
+                                entry[1] = mob
+                                entry[2] = part
+                            end
+                        end
                     end
                 end
             end
         end
     end
-    if not mainTarget or #targets == 0 then return end
+    if count == 0 or not firstHead then return end
 
-    if CombatFlags and HitFunction and RegisterAttack then pcall(function() RegisterAttack:FireServer(0); HitFunction(mainTarget, targets) end); return end
-    if RegisterAttack and RegisterHit then pcall(function() RegisterAttack:FireServer(0); RegisterHit:FireServer(mainTarget, targets) end); return end
-    if HNCHit and HNCAtk then
-        local id = tostring(Player.UserId):sub(2,4) .. tostring(coroutine.running()):sub(11,15)
-        pcall(function() HNCAtk:FireServer() end); pcall(function() HNCHit:FireServer(mainTarget, targets, nil, nil, id) end)
-    end
-end
+    table.clear(_targets)
+    for i = 1, count do _targets[i] = _pool[i] end
 
-local _seedCache = { value = 0, time = 0 }
-local function executeHitRegistration()
     pcall(function()
-        local char = Player.Character; if not char then return end
-        local hrp  = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-        local hitTargets = {}
-        local function scanEnemyFolder(folder)
-            if not folder then return end
-            for _, target in ipairs(folder:GetChildren()) do
-                local hum2 = target:FindFirstChild("Humanoid"); local hrp2 = target:FindFirstChild("HumanoidRootPart")
-                if hum2 and hrp2 and hum2.Health > 0 and target ~= char and (hrp2.Position - hrp.Position).Magnitude <= 60 then
-                    for _, child in ipairs(target:GetChildren()) do if child:IsA("BasePart") then table.insert(hitTargets, {target, child}) end end
-                end
-            end
-        end
-        scanEnemyFolder(workspace:FindFirstChild("Enemies")); scanEnemyFolder(workspace:FindFirstChild("Characters"))
-        if #hitTargets == 0 then return end
-
-        local tool  = char:FindFirstChildOfClass("Tool"); if not tool then return end
-        local wType = tool:GetAttribute("WeaponType")
-        if wType ~= "Melee" and wType ~= "Sword" then return end
-
-        local Modules = RS:FindFirstChild("Modules"); local Net2 = Modules and Modules:FindFirstChild("Net"); if not Net2 then return end
-        local seed = _seedCache.value
-        if tick() - _seedCache.time > 2 then
-            pcall(function() seed = Net2.seed:InvokeServer() end)
-            _seedCache.value = seed; _seedCache.time = tick()
-        end
-        local attackRemote2 = Net2:FindFirstChild("RE/RegisterAttack")
-        local hitRemote2    = Net2:FindFirstChild("RE/RegisterHit")
-        if not attackRemote2 or not hitRemote2 then return end
-        pcall(function() attackRemote2:FireServer() end)
-        local targetHead = hitTargets[1][1]:FindFirstChild("Head"); if not targetHead then return end
-        pcall(function() hitRemote2:FireServer(targetHead, hitTargets, {}) end)
-
-        if _hitRegData.remote and _hitRegData.remoteId then
-            pcall(function()
-                local remoteCode    = "RE/RegisterHit"
-                local encKey        = math.floor(workspace:GetServerTimeNow() / 10 % 10) + 1
-                local encodedString = string.gsub(remoteCode, ".", function(c) return string.char(bit32.bxor(string.byte(c), encKey)) end)
-                local finalId = bit32.bxor(_hitRegData.remoteId + 909090, seed * 2)
-                cloneref(_hitRegData.remote):FireServer(encodedString, finalId, targetHead, hitTargets)
+        RegisterAttack:FireServer(0.0000000000001)
+        RegisterHit:FireServer(firstHead, _targets)
+        if hitRemote and hitRemoteId and CachedSeed ~= 0 then
+            local enc = string.gsub("RE/RegisterHit", ".", function(c)
+                return string.char(bit32.bxor(string.byte(c), math.floor(workspace:GetServerTimeNow()/10%10)+1))
             end)
+            cloneref(hitRemote):FireServer(enc, bit32.bxor(hitRemoteId+909090, CachedSeed*2), firstHead, _targets)
         end
     end)
 end
 
+-- Attack loop: 20 lần/giây khi đang đánh boss (0.05s = bancu standard)
 task.spawn(function()
     while getgenv().NemoRunning do
-        task.wait(hrand(ATK_RATE_MIN, ATK_RATE_MAX))
-        if _G.IsAttackingBoss then pcall(executeFastAttack); pcall(executeFastAttack) end
+        task.wait(0.05)
+        if _G.IsAttackingBoss then pcall(executeFastAttack) end
     end
 end)
 
+-- Anti-stun/ragdoll loop
 task.spawn(function()
     while getgenv().NemoRunning do
-        task.wait(hrand(0.09, 0.18))
-        if _G.IsAttackingBoss then pcall(executeHitRegistration) end
-    end
-end)
-
-task.spawn(function()
-    while getgenv().NemoRunning do
-        task.wait(hrand(0.08, 0.15))
+        task.wait(0.1)
         if not _G.IsAttackingBoss then continue end
         pcall(function()
             local char = Player.Character
@@ -489,20 +450,41 @@ task.spawn(function()
             local Stun = char:FindFirstChild("Stun"); local Busy = char:FindFirstChild("Busy")
             if Stun and Stun.Value ~= 0 then Stun.Value = 0 end
             if Busy and Busy.Value then Busy.Value = false end
-            if hum:GetState() == Enum.HumanoidStateType.Ragdoll or hum:GetState() == Enum.HumanoidStateType.FallingDown then
+            if hum:GetState() == Enum.HumanoidStateType.Ragdoll
+            or hum:GetState() == Enum.HumanoidStateType.FallingDown then
                 hum:ChangeState(Enum.HumanoidStateType.GettingUp)
             end
             if hum.PlatformStand then hum.PlatformStand = false end
             if hum.Sit then hum.Sit = false end
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp and hrp.AssemblyLinearVelocity.Magnitude > 50 then
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+end)
+
+-- BringEnemy: Lerp boss về phía player mỗi 0.1s (bancu pattern — không rò RAM)
+local _bossTarget = nil  -- set bởi PositionOnBoss
+task.spawn(function()
+    while getgenv().NemoRunning do
+        task.wait(0.1)
+        if not _G.IsAttackingBoss or not _bossTarget then continue end
+        pcall(function()
+            local char = Player.Character
+            local plrHRP = char and char:FindFirstChild("HumanoidRootPart")
+            if not plrHRP then return end
+            if not _bossTarget or not _bossTarget.Parent then _bossTarget = nil; return end
+            local bossHRP = _bossTarget:FindFirstChild("HumanoidRootPart")
+            local bossHum = _bossTarget:FindFirstChild("Humanoid")
+            if not bossHRP or not bossHum or bossHum.Health <= 0 then return end
+            local dist = (bossHRP.Position - plrHRP.Position).Magnitude
+            if dist <= 80 and dist > 5 then
+                bossHRP.CFrame = bossHRP.CFrame:Lerp(plrHRP.CFrame, 0.35)
+                antiKnockback(bossHRP)
+                stabilizeMob(_bossTarget)
             end
         end)
     end
 end)
 
+-- AttackMelee upvalue hack (giữ nguyên từ cũ)
 task.spawn(function()
     pcall(function()
         repeat task.wait(0.5) until getgc or not getgenv().NemoRunning
@@ -627,30 +609,49 @@ end
 
 -- Tween TP an toàn cho boss/altar — KHÔNG dùng InstantTP dù config = true
 -- Di chuyển từng bước nhỏ ~120 studs/s, server không detect giật cục
-local function SafeTweenTP(goalCF, stepSpeed)
-    stepSpeed = stepSpeed or 120
+-- TweenPlayer: TweenService trực tiếp lên HRP (bancu pattern)
+-- Server thấy velocity liên tục smooth → không bị detect/kick
+-- BodyVelocity "BodyClip" chống gravity kéo xuống khi tween ngang
+local TweenService  = game:GetService("TweenService")
+local TWEEN_SPEED   = 300  -- studs/s
+local _activeTween  = nil
+
+local function _ensureBodyVelocity(hrp)
+    if not hrp:FindFirstChild("BodyClip") then
+        local bv    = Instance.new("BodyVelocity")
+        bv.Name     = "BodyClip"
+        bv.Parent   = hrp
+        bv.MaxForce = Vector3.new(100000, 100000, 100000)
+        bv.Velocity = Vector3.new(0, 0, 0)
+    end
+end
+
+local function _removeBodyVelocity(hrp)
+    local bp = hrp and hrp:FindFirstChild("BodyClip")
+    if bp then bp:Destroy() end
+end
+
+local function TweenPlayer(goalCF)
     local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local dist = (hrp.Position - goalCF.Position).Magnitude
+    if dist < 1 then return end
+    if _activeTween and _activeTween.PlaybackState == Enum.PlaybackState.Playing then
+        _activeTween:Cancel()
+    end
     toggleNoclip(true)
-    pcall(function()
-        local magnitude = (root.Position - goalCF.Position).Magnitude
-        while magnitude > 1.5 and getgenv().NemoRunning do
-            char = LocalPlayer.Character
-            root = char and char:FindFirstChild("HumanoidRootPart")
-            if not root then break end
-            local dt        = task.wait()
-            local direction = (goalCF.Position - root.Position).Unit
-            local step      = math.min(stepSpeed * dt, magnitude)
-            local nextPos   = root.Position + direction * step
-            root.CFrame     = CFrame.new(nextPos, nextPos + direction)
-            magnitude       = (root.Position - goalCF.Position).Magnitude
-        end
-        if root and root.Parent then
-            root.CFrame = goalCF
-        end
-    end)
+    _ensureBodyVelocity(hrp)
+    local info   = TweenInfo.new(dist / TWEEN_SPEED, Enum.EasingStyle.Linear)
+    _activeTween = TweenService:Create(hrp, info, {CFrame = goalCF})
+    _activeTween:Play()
+    _activeTween.Completed:Wait()
     toggleNoclip(false)
+end
+
+-- SafeTweenTP alias → TweenPlayer (không đổi các chỗ gọi cũ)
+local function SafeTweenTP(goalCF, _speed)
+    TweenPlayer(goalCF)
 end
 
 -- ==========================================
@@ -736,7 +737,7 @@ local function EquipFist()
     end
 end
 
-local DARK_ARENA_CF = CFrame.new(4452.2001953125, 28.60791015625, 4165.89990234375)
+local DARK_ARENA_CF = CFrame.new(3776.61, 14.91, -3498.70)
 
 local function FindDarkbeardAltar()
     local altarNames = {"DarkbeardAltar", "DarkArena", "Altar", "SummonAltar"}
@@ -800,25 +801,37 @@ local function GetDarkbeard()
     return nil
 end
 
-local lastDodge   = 0
-local dodgeIndex  = 1
+local lastDodge    = 0
+local dodgeIndex   = 1
 local dodgeOffsets = { CFrame.new(0, 30, 25), CFrame.new(25, 30, 0), CFrame.new(-25,30, 0), CFrame.new(0, 30, -25) }
 
 local function PositionOnBoss(boss)
-    local root = boss:FindFirstChild("HumanoidRootPart")
-    local hum  = boss:FindFirstChild("Humanoid")
-    if not root or not hum or hum.Health <= 0 then return end
+    local bossHRP = boss:FindFirstChild("HumanoidRootPart")
+    local bossHum = boss:FindFirstChild("Humanoid")
+    if not bossHRP or not bossHum or bossHum.Health <= 0 then return end
     local char = LocalPlayer.Character; if not char then return end
     local plrRoot = char:FindFirstChild("HumanoidRootPart"); if not plrRoot then return end
-    if RandomCFrame then
-        if tick() - lastDodge >= hrand(0.4, 0.7) then dodgeIndex = dodgeIndex % #dodgeOffsets + 1; lastDodge = tick() end
-        local targetPos = (root.CFrame * dodgeOffsets[dodgeIndex]).Position
-        local jx = (math.random() - 0.5) * 3; local jz = (math.random() - 0.5) * 3
-        plrRoot.CFrame = CFrame.new(targetPos + Vector3.new(jx, 0, jz), root.Position)
-    else
-        local targetPos = (root.CFrame * CFrame.new(0, 15, 0)).Position
-        plrRoot.CFrame = CFrame.new(targetPos, root.Position)
+
+    -- Cập nhật boss target cho BringEnemy loop
+    _bossTarget = boss
+
+    -- Tính vị trí đứng quanh boss
+    if tick() - lastDodge >= hrand(0.4, 0.7) then
+        dodgeIndex = dodgeIndex % #dodgeOffsets + 1
+        lastDodge  = tick()
     end
+    local jx       = (math.random() - 0.5) * 3
+    local jz       = (math.random() - 0.5) * 3
+    local offset   = RandomCFrame and dodgeOffsets[dodgeIndex] or CFrame.new(0, 15, 0)
+    local targetPos = (bossHRP.CFrame * offset).Position + Vector3.new(jx, 0, jz)
+    local targetCF  = CFrame.new(targetPos, bossHRP.Position)
+
+    -- Chỉ tween khi drift > 10 studs (không spam TweenPlayer mỗi 0.05s)
+    if (plrRoot.Position - targetPos).Magnitude > 10 then
+        TweenPlayer(targetCF)
+    end
+
+    stabilizeMob(boss)
 end
 
 -- ==========================================
@@ -858,7 +871,7 @@ local function RunDoughKingChain()
             StatusLabel.TextColor3 = Color3.fromRGB(210, 105, 30)
             _G.IsAttackingBoss = true; PositionOnBoss(cocoaMob)
         else
-            _G.IsAttackingBoss = false; Teleport(COCOA_FARM_POS)
+            _G.IsAttackingBoss = false; SafeTweenTP(COCOA_FARM_POS)
         end
         return
     end
@@ -899,7 +912,7 @@ local function RunDoughKingChain()
         if dist > 5 then
             StatusLabel.Text = "Dough King: Đang vào cửa đỏ..."
             StatusLabel.TextColor3 = Color3.fromRGB(200, 50, 50)
-            Teleport(RED_DOOR_CF); return
+            SafeTweenTP(RED_DOOR_CF); return
         else
             EquipWeapon("Red Key"); task.wait(0.5); return
         end
@@ -908,7 +921,7 @@ local function RunDoughKingChain()
     _G.IsAttackingBoss = false
     StatusLabel.Text = "Dough King: Chờ boss spawn..."
     StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
-    Teleport(DOUGH_WAIT_POS)
+    SafeTweenTP(DOUGH_WAIT_POS)
     local waitEnd = tick() + 1
     while tick() < waitEnd and getgenv().NemoRunning do
         task.wait(0.3)
@@ -1037,7 +1050,7 @@ local function GrabFruit(RootPart, fruit)
     local handle = fruit:FindFirstChild("Handle")
     if not handle then return end
     local targetCF = jitterCF(handle.CFrame, 0.3)
-    Teleport(targetCF)
+    SafeTweenTP(targetCF)
     local freshChar = LocalPlayer.Character
     local freshRoot = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
     if not freshRoot then return end
