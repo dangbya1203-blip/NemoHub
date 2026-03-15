@@ -746,59 +746,32 @@ end
 -- ==========================================
 
 -- Fist of Darkness là Tool tạm thời (mất khi die/disconnect, không lưu inventory).
--- Dùng ChildAdded để detect tức thì, không poll mỗi frame.
-local _fistFlag = false
-
-local function _seedFistFlag()
-    -- Seed từ cả Backpack VÀ Character ngay khi script start,
-    -- phòng trường hợp Fist đã có trước khi ChildAdded listener được attach.
-    if LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") then _fistFlag = true end
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Fist of Darkness") then _fistFlag = true end
-end
-
-local function _attachFistListeners(char)
-    if not char then return end
-    char.ChildAdded:Connect(function(child)
-        if child.Name == "Fist of Darkness" then
-            _fistFlag = true
-            warn("[NemoHub] Fist detected in Character! PlaceId=" .. tostring(game.PlaceId))
-        end
-    end)
-    char.ChildRemoved:Connect(function(child)
-        if child.Name == "Fist of Darkness" then
-            _fistFlag = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") ~= nil
-        end
-    end)
-end
-
-LocalPlayer.Backpack.ChildAdded:Connect(function(child)
-    if child.Name == "Fist of Darkness" then
-        _fistFlag = true
-        warn("[NemoHub] Fist detected in Backpack! PlaceId=" .. tostring(game.PlaceId))
+-- Dùng background polling thread set flag mỗi 0.05s để detect tức thì
+-- ngay cả khi main loop đang bận bên trong TouchChest.
+local _hasFist = false
+task.spawn(function()
+    while true do
+        _hasFist = GetBP("Fist of Darkness") ~= nil
+        task.wait(0.05)
     end
 end)
-LocalPlayer.Backpack.ChildRemoved:Connect(function(child)
-    if child.Name == "Fist of Darkness" then
-        _fistFlag = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Fist of Darkness")) ~= nil
-    end
-end)
--- Fist mất khi chết → clear flag ngay
-LocalPlayer.CharacterRemoving:Connect(function()
-    _fistFlag = false
-end)
-LocalPlayer.CharacterAdded:Connect(function(char)
-    _attachFistListeners(char)
-end)
--- Seed ngay khi script chạy
-_seedFistFlag()
-_attachFistListeners(LocalPlayer.Character)
 
 local function HasFistOfDarkness()
-    if _fistFlag then return true end
-    local bp = GetBP("Fist of Darkness")
-    if bp then _fistFlag = true; return true end
-    return false
+    -- Đọc flag (set bởi background thread mỗi 0.05s)
+    -- Fallback GetBP trực tiếp phòng thread chưa chạy vòng đầu
+    return _hasFist or GetBP("Fist of Darkness") ~= nil
 end
+
+-- Background pollers cho Dough King (Sea 3) — detect tức thì khi có chalice/boss spawn
+local _hasChalice    = false
+local _doughKingLive = false
+task.spawn(function()
+    while true do
+        _hasChalice    = (GetBP("God's Chalice") or GetBP("Sweet Chalice")) ~= nil
+        _doughKingLive = GetConnectionEnemies("Dough King") ~= nil
+        task.wait(0.05)
+    end
+end)
 
 local function EquipFist()
     local fist = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness")
@@ -1242,10 +1215,11 @@ end
 local function ShouldBreakChest()
     if CollectFruit and #GetDroppedFruits() > 0 then return true end
     if AutoDoughKing and PlaceId == SEA3_PLACE then
-        if GetBP("God's Chalice") or GetBP("Sweet Chalice")
-            or GetConnectionEnemies("Dough King") then return true end
+        -- Đọc từ flag (background thread 0.05s) để break tức thì
+        if _hasChalice or _doughKingLive then return true end
     end
     if AutoDarkbeard and PlaceId == SEA2_PLACE then
+        -- Đọc từ flag (background thread 0.05s) để break tức thì
         if HasFistOfDarkness() or GetDarkbeard() then return true end
     end
     return false
@@ -1274,9 +1248,8 @@ local function main()
 
         -- [ƯU TIÊN 2] Dough King (Sea 3)
         if AutoDoughKing and PlaceId == SEA3_PLACE then
-            local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
-            local doughKingActive = GetConnectionEnemies("Dough King") ~= nil
-            if hasChalice or doughKingActive then
+            -- Dùng flag từ background poller (detect tức thì)
+            if _hasChalice or _doughKingLive then
                 RunDoughKingChain()
                 task.wait(0.05)
                 continue
