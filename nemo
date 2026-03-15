@@ -1092,6 +1092,16 @@ end
 local function main()
     AutoSelectTeam()
 
+    -- Chờ map load trước khi bắt đầu scan rương.
+    -- DescendantAdded sẽ fill UncheckedChests khi các Chest spawn vào.
+    -- Nếu sau 10 giây vẫn chưa có rương nào thì tiếp tục (có thể server trống rương thật).
+    do
+        StatusLabel.Text = "Status: Chờ map load rương..."
+        StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+        local deadline = tick() + 10
+        repeat task.wait(0.5) until #UncheckedChests > 0 or tick() >= deadline
+    end
+
     while true do
         local char = LocalPlayer.Character
         local RootPart = char and char:FindFirstChild("HumanoidRootPart")
@@ -1146,7 +1156,19 @@ local function main()
         StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 
         local Chests = getChestsSorted()
-        if #Chests == 0 then HopServer(); break end
+        if #Chests == 0 then
+            -- Chờ tối đa 12 giây để rương mới spawn/respawn.
+            -- Tránh hop ngay khi server vừa join mà map chưa load xong.
+            StatusLabel.Text = "Status: Không có rương, chờ spawn (12s)..."
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+            local waitDeadline = tick() + 12
+            repeat task.wait(1) until #getChestsSorted() > 0 or tick() >= waitDeadline
+            if #getChestsSorted() == 0 then
+                HopServer()
+                break
+            end
+            continue
+        end
 
         for _, Chest in ipairs(Chests) do
             if ShouldBreakChest() then break end
