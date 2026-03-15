@@ -1,7 +1,9 @@
 -- ================================================================
--- 🏆 NEMOHUB ULTIMATE V4.6 - THE FINAL MASTERPIECE
--- Tích hợp: Dough King, Darkbeard, Fast Attack, Anti-Ghost, Force Stop (K)
+-- 🏆 NEMOHUB ULTIMATE V4.7 - THE FINAL MASTERPIECE (FULL A-Z)
+-- Tích hợp: Dough King, Darkbeard, Fast Attack, Anti-Ghost, Batching, Force Stop
 -- ================================================================
+
+repeat task.wait() until game:IsLoaded() and game.Players.LocalPlayer
 
 -- ==========================================
 -- [1] TẠO CÔNG TẮC FORCE STOP TỔNG BẰNG PHÍM K
@@ -77,6 +79,21 @@ local LocalPlayer = Players.LocalPlayer
 local Player      = LocalPlayer
 local RS          = ReplicatedStorage
 local PlaceId     = game.PlaceId
+
+-- Multi-PlaceId support (live + beta servers)
+local PlaceIds = {
+    sea1 = { 2753915549, 85211729168715 },
+    sea2 = { 4442272183, 4442272629, 79091703265657 },
+    sea3 = { 3610490391, 7449423635, 100117331123089 },
+}
+local function IsInSea(seaName)
+    local list = PlaceIds[seaName]
+    if not list then return false end
+    for _, id in ipairs(list) do
+        if PlaceId == id then return true end
+    end
+    return false
+end
 
 local function hrand(mn, mx) return mn + math.random() * (mx - mn) end
 local function jitterCF(cf, r)
@@ -664,50 +681,23 @@ end
 -- ==========================================
 -- [9] LOGIC DARKBEARD (FIX LỖI MẤT KEY DO TÊN)
 -- ==========================================
-local _fistFlag = false
-
-local function _seedFistFlag()
-    -- Sửa lại: Quét bằng string.lower để không bỏ sót key viết hoa/thường
+-- Direct scan mỗi lần gọi, không cache flag → chính xác 100%
+local function HasFistOfDarkness()
     for _, item in ipairs(LocalPlayer.Backpack:GetChildren()) do
-        if string.find(string.lower(item.Name), "fist") and string.find(string.lower(item.Name), "darkness") then _fistFlag = true; break end
+        if string.find(string.lower(item.Name), "fist")
+        and string.find(string.lower(item.Name), "darkness") then
+            return true
+        end
     end
     if LocalPlayer.Character then
         for _, item in ipairs(LocalPlayer.Character:GetChildren()) do
-            if string.find(string.lower(item.Name), "fist") and string.find(string.lower(item.Name), "darkness") then _fistFlag = true; break end
+            if string.find(string.lower(item.Name), "fist")
+            and string.find(string.lower(item.Name), "darkness") then
+                return true
+            end
         end
     end
-end
-
-local function _attachFistListeners(char)
-    if not char then return end
-    char.ChildAdded:Connect(function(child)
-        if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then _fistFlag = true end
-    end)
-    char.ChildRemoved:Connect(function(child)
-        if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then 
-            _fistFlag = false; _seedFistFlag()
-        end
-    end)
-end
-
-LocalPlayer.Backpack.ChildAdded:Connect(function(child)
-    if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then _fistFlag = true end
-end)
-LocalPlayer.Backpack.ChildRemoved:Connect(function(child)
-    if string.find(string.lower(child.Name), "fist") and string.find(string.lower(child.Name), "darkness") then 
-        _fistFlag = false; _seedFistFlag() 
-    end
-end)
-
-LocalPlayer.CharacterRemoving:Connect(function() _fistFlag = false end)
-LocalPlayer.CharacterAdded:Connect(function(char) _attachFistListeners(char) end)
-_seedFistFlag()
-_attachFistListeners(LocalPlayer.Character)
-
-local function HasFistOfDarkness()
-    if _fistFlag then return true end
-    _seedFistFlag()
-    return _fistFlag
+    return false
 end
 
 local function EquipFist()
@@ -941,9 +931,6 @@ end
 -- ==========================================
 -- [12] VÒNG LẶP CHÍNH (MAIN)
 -- ==========================================
-local SEA2_PLACE = 4442274612
-local SEA3_PLACE = 7449423635
-
 local function jumpIntoChest(RootPart, Chest, maxAttempts)
     maxAttempts = maxAttempts or 4
     for attempt = 1, maxAttempts do
@@ -965,18 +952,29 @@ local function jumpIntoChest(RootPart, Chest, maxAttempts)
 end
 
 local function TouchChest(RootPart, Chest)
-    RootPart.CFrame = jitterCF(Chest.CFrame * CFrame.new(0, 0.5, 0))
-    local fired = false
-    pcall(function()
-        if firetouchinterest then
-            firetouchinterest(RootPart, Chest, 0)
-            -- ANTI-GHOST TOUCH: Bắt buộc dừng một chút xíu để nhận tiền
-            task.wait(hrand(0.1, 0.15)) 
-            firetouchinterest(RootPart, Chest, 1)
-            fired = true
-        end
-    end)
-    if not fired then jumpIntoChest(RootPart, Chest) end
+    if InstantTP then
+        RootPart.CFrame = jitterCF(Chest.CFrame * CFrame.new(0, 0.5, 0))
+        local fired = false
+        pcall(function()
+            if firetouchinterest then
+                firetouchinterest(RootPart, Chest, 0)
+                task.wait(hrand(0.1, 0.15)) -- ANTI-GHOST TOUCH
+                firetouchinterest(RootPart, Chest, 1)
+                fired = true
+            end
+        end)
+        if not fired then jumpIntoChest(RootPart, Chest) end
+    else
+        Teleport(Chest.CFrame)
+        pcall(function()
+            if firetouchinterest then
+                firetouchinterest(RootPart, Chest, 0)
+                task.wait(0.05)
+                firetouchinterest(RootPart, Chest, 1)
+            end
+        end)
+        RunService.Heartbeat:Wait()
+    end
 end
 
 local function GrabFruit(RootPart, fruit)
@@ -994,8 +992,12 @@ end
 
 local function ShouldBreakChest()
     if CollectFruit and #GetDroppedFruits() > 0 then return true end
-    if AutoDoughKing and PlaceId == SEA3_PLACE then if GetBP("God's Chalice") or GetBP("Sweet Chalice") or GetConnectionEnemies("Dough King") then return true end end
-    if AutoDarkbeard and PlaceId == SEA2_PLACE then if HasFistOfDarkness() or GetDarkbeard() then return true end end
+    if AutoDarkbeard and IsInSea("sea2") then
+        if HasFistOfDarkness() or GetDarkbeard() then return true end
+    end
+    if AutoDoughKing and IsInSea("sea3") then
+        if GetBP("God's Chalice") or GetBP("Sweet Chalice") or GetConnectionEnemies("Dough King") then return true end
+    end
     return false
 end
 
@@ -1019,14 +1021,14 @@ local function main()
         end
 
         -- [ƯU TIÊN 2] Dough King (Sea 3)
-        if AutoDoughKing and PlaceId == SEA3_PLACE then
+        if AutoDoughKing and IsInSea("sea3") then
             local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
             local doughKingActive = GetConnectionEnemies("Dough King") ~= nil
             if hasChalice or doughKingActive then RunDoughKingChain(); task.wait(0.05); continue end
         end
 
         -- [ƯU TIÊN 3] Darkbeard (Sea 2)
-        if AutoDarkbeard and PlaceId == SEA2_PLACE then
+        if AutoDarkbeard and IsInSea("sea2") then
             local darkbeard = GetDarkbeard()
             if darkbeard then
                 _G.IsAttackingBoss = true
@@ -1042,7 +1044,6 @@ local function main()
                 while tick() < deadline and getgenv().NemoRunning do
                     task.wait(0.5)
                     if GetDarkbeard() or not HasFistOfDarkness() then break end
-                    -- Liên tục nhảy để chống bị kick khi đứng chờ Boss
                     local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
                     if hum then hum.Jump = true end
                 end
@@ -1050,10 +1051,10 @@ local function main()
             end
         end
 
-        -- [ƯU TIÊN 4] Auto Chest
+        -- [ƯU TIÊN 4] Auto Chest (Có Lô 15 rương & Fix Smooth TP)
         if ShouldBreakChest() then task.wait(); continue end
         _G.IsAttackingBoss = false
-        StatusLabel.Text = "Status: Auto Chest (Instant)"
+        StatusLabel.Text = "Status: Auto Chest (" .. (InstantTP and "Instant" or "Smooth TP") .. ")"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 
         local Chests = getChestsSorted()
@@ -1070,14 +1071,20 @@ local function main()
             HopServer(); task.wait(3); continue
         end
 
+        -- Lô rương (Batching): Lướt nhanh rồi nghỉ 1 nhịp check Radar
+        local batchSize = InstantTP and 15 or 5 
+        local count = 0
+
         for _, Chest in ipairs(Chests) do
             if not getgenv().NemoRunning then break end
-            if ShouldBreakChest() then break end
+            if count >= batchSize then break end 
+
             char = LocalPlayer.Character; RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
             if Chest and Chest.Parent and Chest:FindFirstChild("TouchInterest") then
                 TouchChest(RootPart, Chest)
                 IgnoredChests[Chest] = tick()
+                count = count + 1
                 task.wait(0.15)
                 if ShouldBreakChest() then break end
             end
