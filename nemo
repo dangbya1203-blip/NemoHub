@@ -11,22 +11,24 @@ local _cfg = getgenv().NemoConfig or {}
 
 -- Key check
 local _key = tostring(getgenv().NemoKey or "")
-local _validKeys = getgenv().NemoValidKeys or {"tester2026"}
+-- Reset NemoValidKeys để tránh bị session cũ inject key giả
+getgenv().NemoValidKeys = nil
+local _validKeys = {"tester2026"}
 print("[NemoHub] Key nhận được: '" .. _key .. "'")
-do
-    local ok = false
-    for _, k in ipairs(_validKeys) do
-        if _key == tostring(k) then ok = true; break end
-    end
-    if not ok then
-        task.spawn(function()
-            while true do
-                warn("[NemoHub] ❌ Key không hợp lệ: '" .. _key .. "'")
-                task.wait(5)
-            end
-        end)
-        return  -- dừng hoàn toàn, không chạy gì thêm
-    end
+
+local _keyValid = false
+for _, k in ipairs(_validKeys) do
+    if _key == tostring(k) then _keyValid = true; break end
+end
+
+if not _keyValid then
+    task.spawn(function()
+        while true do
+            warn("[NemoHub] ❌ Key không hợp lệ: '" .. _key .. "'")
+            task.wait(5)
+        end
+    end)
+    return  -- top-level return, không nằm trong block nào
 end
 
 local InstantTP     = _cfg.InstantTP     ~= nil and _cfg.InstantTP     or true
