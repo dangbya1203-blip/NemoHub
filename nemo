@@ -72,9 +72,7 @@ local PlaceId     = game.PlaceId
 local function hrand(mn, mx)
     return mn + math.random() * (mx - mn)
 end
-local function hwait()
-    task.wait(hrand(HUMANIZE_MIN, HUMANIZE_MAX))
-end
+-- hrand: dùng trong jitterCF, anti-AFK, fast attack, chest fire, v.v.
 
 -- Jitter CFrame: dịch ngẫu nhiên trong bán kính r studs trên mặt phẳng ngang
 local function jitterCF(cf, r)
@@ -87,7 +85,7 @@ end
 local UncheckedChests = {}
 local FirstRun        = true
 local IgnoredChests   = {}
-local _chestsDirty    = true   -- flag: rebuild UncheckedChests khi có thay đổi
+local _chestsDirty    = false  -- FirstRun scan sẽ set true khi chạy lần đầu
 
 -- Tự động thêm chest mới spawn vào danh sách
 workspace.DescendantAdded:Connect(function(obj)
@@ -171,7 +169,18 @@ pcall(function()
         end
     end
 end)
-pcall(function() if isfile and isfile(StatFile) then UIStats = HttpService:JSONDecode(readfile(StatFile)) end end)
+pcall(function()
+    if isfile and isfile(StatFile) then
+        local decoded = HttpService:JSONDecode(readfile(StatFile))
+        if type(decoded) == "table" then
+            UIStats = decoded
+            -- Đảm bảo StartTime luôn có giá trị hợp lệ
+            if not UIStats.StartTime or type(UIStats.StartTime) ~= "number" then
+                UIStats.StartTime = os.time()
+            end
+        end
+    end
+end)
 
 -- Ghi nhận server hiện tại khi vào
 VisitedServers[game.JobId] = os.time()
@@ -418,7 +427,7 @@ local function executeFastAttack(toolTipFilter)
     if not mainTarget or #targets == 0 then return end
 
     -- Gửi hit theo thứ tự ưu tiên
-    if CombatFlags and HitFunction then
+    if CombatFlags and HitFunction and RegisterAttack then
         pcall(function() RegisterAttack:FireServer(0); HitFunction(mainTarget, targets) end)
         return
     end
@@ -653,16 +662,18 @@ local function Teleport(Goal, Speed)
     else
         Speed = Speed or MaxSpeed
         toggleNoclip(true)
-        local Magnitude = (RootPart.Position - Goal.Position).Magnitude
-        while Magnitude > 1 do
-            if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
-            local Direction    = (Goal.Position - RootPart.Position).unit
-            local NextPosition = RootPart.Position + Direction * math.min(Speed * task.wait(), Magnitude)
-            if (NextPosition - Goal.Position).Magnitude < 1 then RootPart.CFrame = Goal; break end
-            RootPart.CFrame = CFrame.new(NextPosition)
-            Magnitude = (RootPart.Position - Goal.Position).Magnitude
-        end
-        toggleNoclip(false)
+        pcall(function()
+            local Magnitude = (RootPart.Position - Goal.Position).Magnitude
+            while Magnitude > 1 do
+                if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
+                local Direction    = (Goal.Position - RootPart.Position).unit
+                local NextPosition = RootPart.Position + Direction * math.min(Speed * task.wait(), Magnitude)
+                if (NextPosition - Goal.Position).Magnitude < 1 then RootPart.CFrame = Goal; break end
+                RootPart.CFrame = CFrame.new(NextPosition)
+                Magnitude = (RootPart.Position - Goal.Position).Magnitude
+            end
+        end)
+        toggleNoclip(false)  -- luôn tắt noclip dù break hay error giữa chừng
     end
 end
 
@@ -702,19 +713,14 @@ local function EquipWeapon(name)
 end
 
 local function GetConnectionEnemies(a)
-    for _, v in pairs(replicated:GetChildren()) do
-        if v:IsA("Model")
-            and ((typeof(a) == "table" and table.find(a, v.Name)) or v.Name == a)
-            and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0
-        then return v end
-    end
-    local enemiesFolder = workspace:FindFirstChild("Enemies")
-    if enemiesFolder then
-        for _, v in pairs(enemiesFolder:GetChildren()) do
-            if v:IsA("Model")
-                and ((typeof(a) == "table" and table.find(a, v.Name)) or v.Name == a)
-                and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0
-            then return v end
+    for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
+        if folder then
+            for _, v in pairs(folder:GetChildren()) do
+                if v:IsA("Model")
+                    and ((typeof(a) == "table" and table.find(a, v.Name)) or v.Name == a)
+                    and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0
+                then return v end
+            end
         end
     end
 end
@@ -741,7 +747,9 @@ end
 
 local function EquipFist()
     local fist = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness")
-    if fist and LocalPlayer.Character then fist.Parent = LocalPlayer.Character end
+    if fist and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid:EquipTool(fist)
+    end
 end
 
 local function GetDarkbeard()
@@ -855,6 +863,7 @@ local function RunDoughKingChain()
     if GetBP("Sweet Chalice") then
         replicated.Remotes.CommF_:InvokeServer("CakePrinceSpawner", true)
         task.wait(0.5)
+        return  -- chờ boss spawn, không fall-through xuống các bước sau
     end
 
     -- Bước 5: Mở dungeon nếu chưa có RedDoor
@@ -881,6 +890,7 @@ local function RunDoughKingChain()
         else
             EquipWeapon("Red Key")
             task.wait(0.5)
+            return  -- chờ server xử lý mở cửa, tránh race với Bước 7
         end
     end
 
@@ -902,17 +912,7 @@ local function RunDoughKingChain()
     task.wait(1)
 end
 
--- ==========================================
 -- [10] LOGIC RƯƠNG & SERVER HOP
--- ==========================================
-local function DistanceFromPlrSort(ObjectList)
-    local char = LocalPlayer.Character
-    local RootPart = char and char:FindFirstChild("HumanoidRootPart")
-    if not RootPart then return end
-    table.sort(ObjectList, function(A, B)
-        return (RootPart.Position - A.Position).Magnitude < (RootPart.Position - B.Position).Magnitude
-    end)
-end
 
 local function getChestsSorted()
     -- Scan lần đầu
@@ -1057,32 +1057,34 @@ local SEA3_PLACE = 7449423635
 -- Fallback: nhảy + dịch chuyển vật lý vào rương khi firetouchinterest thất bại
 local function jumpIntoChest(RootPart, Chest, maxAttempts)
     maxAttempts = maxAttempts or 4
-    local char = LocalPlayer.Character
-    local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return end
 
     for attempt = 1, maxAttempts do
         if not Chest or not Chest.Parent then return end
+        -- Refresh char/hum/RootPart mỗi attempt phòng respawn giữa chừng
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or hum.Health <= 0 or not root then return end
+
         local angle        = (attempt - 1) * (math.pi * 2 / maxAttempts) + math.random() * 0.3
         local approachDist = hrand(1.5, 2.5)
-        RootPart.CFrame    = Chest.CFrame * CFrame.new(math.cos(angle) * approachDist, 1.5, math.sin(angle) * approachDist)
+        root.CFrame        = Chest.CFrame * CFrame.new(math.cos(angle) * approachDist, 1.5, math.sin(angle) * approachDist)
         RunService.Heartbeat:Wait()
 
         hum.Jump = true
         pcall(function()
-            RootPart.AssemblyLinearVelocity = (Chest.Position - RootPart.Position).Unit * 28
+            root.AssemblyLinearVelocity = (Chest.Position - root.Position).Unit * 28
         end)
         task.wait(0.06)
-        RootPart.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
+        root.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
 
         pcall(function()
             if firetouchinterest then
-                firetouchinterest(RootPart, Chest, 0)
+                firetouchinterest(root, Chest, 0)
                 task.wait(hrand(0.06, 0.10))
-                firetouchinterest(RootPart, Chest, 1)
+                firetouchinterest(root, Chest, 1)
             end
         end)
-        -- Không chờ rương biến mất — sang attempt tiếp hoặc thoát
         if not Chest or not Chest.Parent then return end
     end
 end
@@ -1110,15 +1112,17 @@ end
 local function GrabFruit(RootPart, fruit)
     local handle = fruit:FindFirstChild("Handle")
     if not handle then return end
-    -- Jitter nhẹ vị trí lụm trái, không đứng chính xác tâm
     local targetCF = jitterCF(handle.CFrame, 0.3)
-    Teleport(targetCF)
-    RootPart.CFrame = targetCF
+    Teleport(targetCF)  -- InstantTP tự set CFrame, non-instant tự di chuyển
+    -- Refresh RootPart sau Teleport phòng respawn giữa chừng (non-instant mode)
+    local freshChar = LocalPlayer.Character
+    local freshRoot = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+    if not freshRoot then return end
     pcall(function()
         if firetouchinterest then
-            firetouchinterest(RootPart, handle, 0)
+            firetouchinterest(freshRoot, handle, 0)
             task.wait(hrand(0.08, 0.15))
-            firetouchinterest(RootPart, handle, 1)
+            firetouchinterest(freshRoot, handle, 1)
         end
     end)
     task.wait(hrand(0.4, 0.7))
@@ -1163,9 +1167,13 @@ local function main()
 
         -- [ƯU TIÊN 2] Dough King (Sea 3)
         if AutoDoughKing and PlaceId == SEA3_PLACE then
-            RunDoughKingChain()
-            task.wait(0.05)
-            continue
+            local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
+            if hasChalice then
+                RunDoughKingChain()
+                task.wait(0.05)
+                continue
+            end
+            -- Không có Chalice → fall through xuống Chest farm bình thường
         end
 
         -- [ƯU TIÊN 3] Darkbeard (Sea 2)
@@ -1213,7 +1221,8 @@ local function main()
                 task.wait(0.8)
             end
             HopServer()
-            break
+            task.wait(3)
+            continue  -- nếu hop thất bại, thử lại thay vì chết script
         end
 
         for _, Chest in ipairs(Chests) do
