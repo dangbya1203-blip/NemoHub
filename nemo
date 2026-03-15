@@ -11,14 +11,17 @@ local _cfg = getgenv().NemoConfig or {}
 
 -- Key check
 local _key = getgenv().NemoKey or ""
-local _validKeys = getgenv().NemoValidKeys or {}
+local _validKeys = getgenv().NemoValidKeys or {"tester2026"}
 if #_validKeys > 0 then
     local ok = false
     for _, k in ipairs(_validKeys) do
         if _key == k then ok = true; break end
     end
     if not ok then
-        error("[NemoHub] Key không hợp lệ. Vui lòng nhập đúng key trong loader.")
+        while true do
+            warn("[NemoHub] ❌ Key không hợp lệ: '" .. tostring(_key) .. "'")
+            task.wait(5)
+        end
     end
 end
 
