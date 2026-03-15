@@ -1139,15 +1139,8 @@ end
 local function main()
     AutoSelectTeam()
 
-    -- Chờ map load trước khi bắt đầu scan rương.
-    -- DescendantAdded sẽ fill UncheckedChests khi các Chest spawn vào.
-    -- Nếu sau 10 giây vẫn chưa có rương nào thì tiếp tục (có thể server trống rương thật).
-    do
-        StatusLabel.Text = "Status: Chờ map load rương..."
-        StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-        local deadline = tick() + 10
-        repeat task.wait(0.1) until #UncheckedChests > 0 or tick() >= deadline
-    end
+    -- Không chờ map load — farm ngay, DescendantAdded + FirstRun scan tự fill rương.
+
 
     while true do
         local char = LocalPlayer.Character
