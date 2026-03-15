@@ -2,8 +2,6 @@
 -- 🏆 NEMOHUB ULTIMATE V4.4 - NO CHEST WAIT
 -- Thêm: Dough King Full Chain, Darkbeard, Fast Attack Core
 -- ================================================================
-repeat task.wait() until game:IsLoaded() and game.Players.LocalPlayer
-
 -- ==========================================
 -- [1] CONFIG (đọc từ loader qua getgenv())
 -- ==========================================
@@ -739,10 +737,40 @@ local function StoreFruit()
 end
 
 -- ==========================================
+-- ==========================================
 -- [8] LOGIC DARKBEARD
 -- ==========================================
+
+-- Fist of Darkness là Tool tạm thời (KHÔNG lưu được inventory, mất khi die/disconnect).
+-- Dùng ChildAdded để detect tức thì ngay khi rương trả về Tool, không cần poll.
+local _fistFlag = false
+LocalPlayer.Backpack.ChildAdded:Connect(function(child)
+    if child.Name == "Fist of Darkness" then _fistFlag = true end
+end)
+LocalPlayer.Backpack.ChildRemoved:Connect(function(child)
+    if child.Name == "Fist of Darkness" then
+        -- Có thể vừa equip sang Character, recheck trước khi clear flag
+        _fistFlag = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Fist of Darkness")) ~= nil
+    end
+end)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    char.ChildAdded:Connect(function(child)
+        if child.Name == "Fist of Darkness" then _fistFlag = true end
+    end)
+    char.ChildRemoved:Connect(function(child)
+        if child.Name == "Fist of Darkness" then
+            _fistFlag = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") ~= nil
+        end
+    end)
+end)
+
 local function HasFistOfDarkness()
-    return GetBP("Fist of Darkness") ~= nil
+    -- Fist là Tool trong Backpack/Character, KHÔNG phải Material trong server inventory.
+    -- Dùng flag (cập nhật qua ChildAdded) + fallback GetBP để chắc chắn không miss.
+    if _fistFlag then return true end
+    local bp = GetBP("Fist of Darkness")
+    if bp then _fistFlag = true; return true end
+    return false
 end
 
 local function EquipFist()
@@ -750,6 +778,60 @@ local function EquipFist()
     if fist and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
         LocalPlayer.Character.Humanoid:EquipTool(fist)
     end
+    -- Nếu Fist đã ở Character (đã equip) thì không cần làm gì
+end
+
+-- Vị trí Dark Arena (bàn thờ triệu hồi Darkbeard) ở Sea 2
+local DARK_ARENA_CF = CFrame.new(4452.2001953125, 28.60791015625, 4165.89990234375)
+
+-- Tìm Part bàn thờ trong workspace (tên thường gặp trong Blox Fruits)
+local function FindDarkbeardAltar()
+    local altarNames = {"DarkbeardAltar", "DarkArena", "Altar", "SummonAltar"}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") and v:FindFirstChild("TouchInterest") then
+            for _, n in ipairs(altarNames) do
+                if string.find(v.Name, n) then return v end
+            end
+        end
+    end
+    return nil
+end
+
+-- Kích hoạt Fist tại Dark Arena để triệu hồi Darkbeard.
+-- Thử cả firetouchinterest + remote invocation để đảm bảo hoạt động.
+local function ActivateFistAtAltar()
+    local char = LocalPlayer.Character; if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
+
+    EquipFist()
+    task.wait(0.2)
+
+    -- Bước 1: Tele đến Dark Arena
+    Teleport(jitterCF(DARK_ARENA_CF))
+    task.wait(0.25)
+
+    -- Bước 2: firetouchinterest lên altar Part nếu tìm được
+    local altar = FindDarkbeardAltar()
+    if altar then
+        local freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if freshRoot then
+            pcall(function()
+                freshRoot.CFrame = jitterCF(altar.CFrame * CFrame.new(0, 1.5, 0))
+            end)
+            task.wait(0.1)
+            pcall(function()
+                if firetouchinterest then
+                    firetouchinterest(freshRoot, altar, 0)
+                    task.wait(hrand(0.08, 0.13))
+                    firetouchinterest(freshRoot, altar, 1)
+                end
+            end)
+        end
+    end
+
+    -- Bước 3: Remote invocation (dự phòng, tên remote thực tế trong Blox Fruits)
+    pcall(function() RS.Remotes.CommF_:InvokeServer("DarkBeardAltar") end)
+    pcall(function() RS.Remotes.CommF_:InvokeServer("DarkArena") end)
 end
 
 local function GetDarkbeard()
@@ -825,13 +907,23 @@ local function RunDoughKingChain()
     local char = LocalPlayer.Character; if not char then return end
     local plrRoot = char:FindFirstChild("HumanoidRootPart"); if not plrRoot then return end
 
-    -- Bước 1: Chưa có God's Chalice / Sweet Chalice → skip về Chest farm
-    -- Không farm Elite Hunter — chờ nhặt từ rương tự nhiên
-    if not GetBP("God's Chalice") and not GetBP("Sweet Chalice") then
+    -- Bước 1: Chưa có Chalice VÀ không có boss active → về Chest farm
+    local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
+    local doughKing  = GetConnectionEnemies("Dough King")
+    if not hasChalice and not doughKing then
         _G.IsAttackingBoss = false
         StatusLabel.Text = "Dough King: Chưa có God's Chalice, farm Chest chờ..."
         StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
         return  -- trả về main loop → xuống Auto Chest
+    end
+
+    -- Bước 7 (ưu tiên cao): Dough King đã spawn → đánh ngay, bất kể chalice còn hay không
+    if doughKing then
+        StatusLabel.Text = "Dough King: Đang đánh Boss!!!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 200)
+        _G.IsAttackingBoss = true
+        PositionOnBoss(doughKing)
+        return
     end
 
     -- Bước 2: Cần Conjured Cocoa ≥ 10 để craft
@@ -856,14 +948,25 @@ local function RunDoughKingChain()
         StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
         replicated.Remotes.CommF_:InvokeServer("SweetChaliceNpc")
         task.wait(1)
-        return  -- chờ vòng lặp tiếp theo sync Sweet Chalice từ server
+        return
     end
 
-    -- Bước 4: Spawn lại Dough King bằng Sweet Chalice
+    -- Bước 4: Spawn Dough King bằng Sweet Chalice
+    -- Sau khi fire, Sweet Chalice bị consume → hasChalice = false vòng sau
+    -- nhưng main loop sẽ vẫn vào RunDoughKingChain vì doughKingActive = true
     if GetBP("Sweet Chalice") then
+        StatusLabel.Text = "Dough King: Đang spawn boss..."
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
         replicated.Remotes.CommF_:InvokeServer("CakePrinceSpawner", true)
-        task.wait(0.5)
-        return  -- chờ boss spawn, không fall-through xuống các bước sau
+        -- Chờ boss spawn tối đa 10s, check mỗi 0.5s
+        -- Nếu trong lúc chờ có God's Chalice mới drop → cũng break ra
+        local deadline = tick() + 10
+        while tick() < deadline do
+            task.wait(0.5)
+            if GetConnectionEnemies("Dough King") then break end
+            if GetBP("God's Chalice") then break end  -- chalice mới, xử lý vòng sau
+        end
+        return
     end
 
     -- Bước 5: Mở dungeon nếu chưa có RedDoor
@@ -890,26 +993,22 @@ local function RunDoughKingChain()
         else
             EquipWeapon("Red Key")
             task.wait(0.5)
-            return  -- chờ server xử lý mở cửa, tránh race với Bước 7
+            return
         end
     end
 
-    -- Bước 7: Dough King đã spawn → bay lên đầu, Fast Attack lo phần còn lại
-    local doughKing = GetConnectionEnemies("Dough King")
-    if doughKing then
-        StatusLabel.Text = "Dough King: Đang đánh Boss!!!"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 200)
-        _G.IsAttackingBoss = true
-        PositionOnBoss(doughKing)
-        return
-    end
-
-    -- Không có boss, không có gì để làm → chờ tại vị trí
+    -- Không có boss, không có gì để làm → chờ ngắn tại vị trí spawn
+    -- Không wait 1s blind — check God's Chalice drop mỗi 0.3s phòng miss
     _G.IsAttackingBoss = false
     StatusLabel.Text = "Dough King: Chờ boss spawn..."
     StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
     Teleport(DOUGH_WAIT_POS)
-    task.wait(1)
+    local waitEnd = tick() + 1
+    while tick() < waitEnd do
+        task.wait(0.3)
+        if GetConnectionEnemies("Dough King") then break end
+        if GetBP("God's Chalice") then break end
+    end
 end
 
 -- [10] LOGIC RƯƠNG & SERVER HOP
@@ -1136,6 +1235,7 @@ local function ShouldBreakChest()
         if GetBP("God's Chalice") or GetBP("Sweet Chalice") then return true end
     end
     if AutoDarkbeard and PlaceId == SEA2_PLACE then
+        -- Fist là Tool tạm thời, HasFistOfDarkness dùng _fistFlag (ChildAdded) + GetBP fallback
         if HasFistOfDarkness() or GetDarkbeard() then return true end
     end
     return false
@@ -1143,9 +1243,6 @@ end
 
 local function main()
     AutoSelectTeam()
-
-    -- Không chờ map load — farm ngay, DescendantAdded + FirstRun scan tự fill rương.
-
 
     while true do
         local char = LocalPlayer.Character
@@ -1168,18 +1265,22 @@ local function main()
         -- [ƯU TIÊN 2] Dough King (Sea 3)
         if AutoDoughKing and PlaceId == SEA3_PLACE then
             local hasChalice = GetBP("God's Chalice") or GetBP("Sweet Chalice")
-            if hasChalice then
+            -- Vào chain nếu: có chalice (cần craft/spawn), HOẶC Dough King đã spawn
+            -- (Sweet Chalice bị consume sau CakePrinceSpawner → hasChalice = false
+            --  nhưng boss đã ở đó, phải tiếp tục đánh chứ không farm chest)
+            local doughKingActive = GetConnectionEnemies("Dough King") ~= nil
+            if hasChalice or doughKingActive then
                 RunDoughKingChain()
                 task.wait(0.05)
                 continue
             end
-            -- Không có Chalice → fall through xuống Chest farm bình thường
         end
 
         -- [ƯU TIÊN 3] Darkbeard (Sea 2)
         if AutoDarkbeard and PlaceId == SEA2_PLACE then
             local darkbeard = GetDarkbeard()
             if darkbeard then
+                -- Boss đã spawn → đánh
                 _G.IsAttackingBoss = true
                 StatusLabel.Text = "Status: Đánh Darkbeard!!!"
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
@@ -1187,31 +1288,41 @@ local function main()
                 task.wait(0.05)
                 continue
             elseif HasFistOfDarkness() then
+                -- Có Fist nhưng boss chưa spawn → kích hoạt tại Dark Arena
                 _G.IsAttackingBoss = false
-                StatusLabel.Text = "Status: Chờ Darkbeard spawn..."
+                StatusLabel.Text = "Status: Đang dùng Fist of Darkness tại Dark Arena..."
                 StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
-                EquipFist()
-                RootPart.CFrame = CFrame.new(3677.08203125, 62.751937866211, -3144.8332519531)
-                local hum = char:FindFirstChild("Humanoid")
-                if hum then hum.Jump = true end
-                task.wait(1)
+                ActivateFistAtAltar()
+                -- Sau khi activate, chờ boss spawn tối đa 8s rồi recheck
+                local deadline = tick() + 8
+                while tick() < deadline do
+                    task.wait(0.5)
+                    if GetDarkbeard() then break end
+                    -- Nếu vì lý do gì Fist biến mất (die/disconnect), thoát vòng chờ
+                    if not HasFistOfDarkness() then break end
+                end
                 continue
             end
         end
 
         -- [ƯU TIÊN 4] Auto Chest
+        -- Guard: nếu ShouldBreakChest đúng ngay tại đây (Fist/Chalice/Darkbeard vừa xuất hiện
+        -- trong lúc đang xử lý priority 1-3 ở trên) thì continue lại từ đầu để priority 3 xử lý.
+        if ShouldBreakChest() then task.wait(); continue end
+
         _G.IsAttackingBoss = false
         StatusLabel.Text = "Status: Auto Chest (Instant)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 
         local Chests = getChestsSorted()
         if #Chests == 0 then
-            -- Không có rương: giả lập hoạt động 3s (anti-kick) rồi hop ngay.
-            -- Không tele trong lúc chờ — tele khi không có rương sẽ bị kick.
             StatusLabel.Text = "Status: Không có rương, chờ 3s rồi hop..."
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
             local antiKickEnd = tick() + 3
             while tick() < antiKickEnd do
+                -- Trong lúc chờ anti-kick, check Fist mỗi 0.8s.
+                -- Nếu có Fist thì KHÔNG hop — break ra ngoài để main loop xử lý.
+                if ShouldBreakChest() then break end
                 pcall(function()
                     VirtualUser:CaptureController()
                     VirtualUser:ClickButton2(Vector2.new(
@@ -1220,24 +1331,28 @@ local function main()
                 end)
                 task.wait(0.8)
             end
+            -- Kiểm tra lần cuối trước khi hop: nếu vừa nhặt được Fist/Chalice thì không hop
+            if ShouldBreakChest() then task.wait(); continue end
             HopServer()
             task.wait(3)
-            continue  -- nếu hop thất bại, thử lại thay vì chết script
+            continue
         end
 
         for _, Chest in ipairs(Chests) do
             if ShouldBreakChest() then break end
-            -- Refresh RootPart phòng respawn giữa chừng
             char = LocalPlayer.Character
             RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
             if Chest and Chest.Parent and Chest:FindFirstChild("TouchInterest") then
                 TouchChest(RootPart, Chest)
                 IgnoredChests[Chest] = tick()
+                -- Yield 0.15s sau mỗi chest để server kịp trả Fist về Backpack
+                task.wait(0.15)
+                if ShouldBreakChest() then break end
             end
         end
 
-        task.wait()  -- 1 frame (~0.016s) thay vì 0.05s
+        task.wait()
     end
 end
 
