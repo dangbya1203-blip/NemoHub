@@ -46,10 +46,7 @@ local TP_JITTER    = _cfg.TPJitter    or 0.55
 local ATK_RATE_MIN = _cfg.AtkRateMin  or 0.05
 local ATK_RATE_MAX = _cfg.AtkRateMax  or 0.09
 
--- Chest farm speed tuning
--- TOUCH_FIRE_WAIT: thời gian giữa fire(0) và fire(1) — 0.02s = 1 frame, đủ để server nhận
 -- CHEST_IGNORE_TIME: sau khi fire 1 rương xong, bao lâu thì thử lại rương đó (giây)
-local TOUCH_FIRE_WAIT   = _cfg.TouchFireWait   or 0.02
 local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 1.5
 
 -- ==========================================
@@ -1071,13 +1068,13 @@ local function jumpIntoChest(RootPart, Chest, maxAttempts)
         pcall(function()
             RootPart.AssemblyLinearVelocity = (Chest.Position - RootPart.Position).Unit * 28
         end)
-        task.wait(TOUCH_FIRE_WAIT)
+        task.wait(0.06)
         RootPart.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
 
         pcall(function()
             if firetouchinterest then
                 firetouchinterest(RootPart, Chest, 0)
-                task.wait(TOUCH_FIRE_WAIT)
+                task.wait(hrand(0.06, 0.10))
                 firetouchinterest(RootPart, Chest, 1)
             end
         end)
@@ -1094,7 +1091,7 @@ local function TouchChest(RootPart, Chest)
     pcall(function()
         if firetouchinterest then
             firetouchinterest(RootPart, Chest, 0)
-            task.wait(TOUCH_FIRE_WAIT)   -- 0.02s thay vì 0.07-0.11s
+            task.wait(hrand(0.07, 0.11))
             firetouchinterest(RootPart, Chest, 1)
             fired = true
         end
@@ -1116,11 +1113,11 @@ local function GrabFruit(RootPart, fruit)
     pcall(function()
         if firetouchinterest then
             firetouchinterest(RootPart, handle, 0)
-            task.wait(TOUCH_FIRE_WAIT)
+            task.wait(hrand(0.08, 0.15))
             firetouchinterest(RootPart, handle, 1)
         end
     end)
-    task.wait(hrand(0.10, 0.15))   -- đủ để server xác nhận nhặt trái
+    task.wait(hrand(0.4, 0.7))
     StoreFruit()
 end
 
