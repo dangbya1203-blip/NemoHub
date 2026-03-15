@@ -625,6 +625,34 @@ local function Teleport(Goal, Speed)
     end
 end
 
+-- Tween TP an toàn cho boss/altar — KHÔNG dùng InstantTP dù config = true
+-- Di chuyển từng bước nhỏ ~120 studs/s, server không detect giật cục
+local function SafeTweenTP(goalCF, stepSpeed)
+    stepSpeed = stepSpeed or 120
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    toggleNoclip(true)
+    pcall(function()
+        local magnitude = (root.Position - goalCF.Position).Magnitude
+        while magnitude > 1.5 and getgenv().NemoRunning do
+            char = LocalPlayer.Character
+            root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then break end
+            local dt        = task.wait()
+            local direction = (goalCF.Position - root.Position).Unit
+            local step      = math.min(stepSpeed * dt, magnitude)
+            local nextPos   = root.Position + direction * step
+            root.CFrame     = CFrame.new(nextPos, nextPos + direction)
+            magnitude       = (root.Position - goalCF.Position).Magnitude
+        end
+        if root and root.Parent then
+            root.CFrame = goalCF
+        end
+    end)
+    toggleNoclip(false)
+end
+
 -- ==========================================
 -- [8] HELPER VẬT PHẨM & KẺ THÙ
 -- ==========================================
@@ -723,18 +751,46 @@ end
 local function ActivateFistAtAltar()
     local char = LocalPlayer.Character; if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
-    EquipFist(); task.wait(0.2)
-    Teleport(jitterCF(DARK_ARENA_CF)); task.wait(0.25)
+
+    -- [1] Equip fist trước
+    StatusLabel.Text = "Darkbeard: Trang bị Fist of Darkness..."
+    StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
+    EquipFist(); task.wait(0.3)
+
+    -- [2] TP tới arena
+    StatusLabel.Text = "Darkbeard: Đang tới Dark Arena..."
+    StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
+    SafeTweenTP(jitterCF(DARK_ARENA_CF, 1.5)); task.wait(0.4)
+
+    -- [3] Tìm và đứng lên altar
     local altar = FindDarkbeardAltar()
-    if altar then
-        local freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if freshRoot then
-            pcall(function() freshRoot.CFrame = jitterCF(altar.CFrame * CFrame.new(0, 1.5, 0)) end); task.wait(0.1)
-            pcall(function() if firetouchinterest then firetouchinterest(freshRoot, altar, 0); task.wait(hrand(0.08, 0.13)); firetouchinterest(freshRoot, altar, 1) end end)
-        end
+    local freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if altar and freshRoot then
+        StatusLabel.Text = "Darkbeard: Đứng lên Altar..."
+        StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
+        SafeTweenTP(altar.CFrame * CFrame.new(0, 2, 0), 80)
+        task.wait(0.2)
+        -- refetch sau tween
+        freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        pcall(function()
+            if firetouchinterest and freshRoot then
+                firetouchinterest(freshRoot, altar, 0)
+                task.wait(hrand(0.1, 0.15))
+                firetouchinterest(freshRoot, altar, 1)
+            end
+        end)
+        task.wait(0.1)
     end
-    pcall(function() RS.Remotes.CommF_:InvokeServer("DarkBeardAltar") end)
-    pcall(function() RS.Remotes.CommF_:InvokeServer("DarkArena") end)
+
+    -- [4] Invoke remote spawn - retry 3 lần
+    StatusLabel.Text = "Darkbeard: Gọi spawn boss..."
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
+    for _ = 1, 3 do
+        pcall(function() RS.Remotes.CommF_:InvokeServer("DarkBeardAltar") end)
+        pcall(function() RS.Remotes.CommF_:InvokeServer("DarkArena") end)
+        task.wait(0.3)
+        if GetDarkbeard() then break end
+    end
 end
 
 local function GetDarkbeard()
@@ -1037,15 +1093,18 @@ local function main()
                 PositionOnBoss(darkbeard); task.wait(0.05); continue
             elseif HasFistOfDarkness() then
                 _G.IsAttackingBoss = false
-                StatusLabel.Text = "Status: Chờ Server Cooldown (Bảo vệ Key)..."
-                StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
-                ActivateFistAtAltar()
-                local deadline = tick() + 8
+                -- Retry activate mỗi 5s cho đến khi boss spawn hoặc mất fist
+                local retryTick = 0
+                local deadline = tick() + 60  -- chờ tối đa 60s
                 while tick() < deadline and getgenv().NemoRunning do
-                    task.wait(0.5)
                     if GetDarkbeard() or not HasFistOfDarkness() then break end
+                    if tick() - retryTick >= 5 then
+                        retryTick = tick()
+                        ActivateFistAtAltar()
+                    end
                     local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
                     if hum then hum.Jump = true end
+                    task.wait(0.5)
                 end
                 continue
             end
