@@ -814,24 +814,35 @@ local function PositionOnBoss(boss)
 
     -- Cập nhật boss target cho BringEnemy loop
     _bossTarget = boss
+    stabilizeMob(boss)
 
     -- Tính vị trí đứng quanh boss
     if tick() - lastDodge >= hrand(0.4, 0.7) then
         dodgeIndex = dodgeIndex % #dodgeOffsets + 1
         lastDodge  = tick()
     end
-    local jx       = (math.random() - 0.5) * 3
-    local jz       = (math.random() - 0.5) * 3
-    local offset   = RandomCFrame and dodgeOffsets[dodgeIndex] or CFrame.new(0, 15, 0)
+    local jx        = (math.random() - 0.5) * 3
+    local jz        = (math.random() - 0.5) * 3
+    local offset    = RandomCFrame and dodgeOffsets[dodgeIndex] or CFrame.new(0, 15, 0)
     local targetPos = (bossHRP.CFrame * offset).Position + Vector3.new(jx, 0, jz)
     local targetCF  = CFrame.new(targetPos, bossHRP.Position)
+    local dist      = (plrRoot.Position - targetPos).Magnitude
 
-    -- Chỉ tween khi drift > 10 studs (không spam TweenPlayer mỗi 0.05s)
-    if (plrRoot.Position - targetPos).Magnitude > 10 then
-        TweenPlayer(targetCF)
+    -- Chỉ fire tween khi drift > 25 studs VÀ không có tween đang chạy
+    -- Không dùng Completed:Wait() → không block main loop
+    if dist > 25 then
+        if not _activeTween or _activeTween.PlaybackState ~= Enum.PlaybackState.Playing then
+            toggleNoclip(true)
+            _ensureBodyVelocity(plrRoot)
+            if _activeTween then _activeTween:Cancel() end
+            local info   = TweenInfo.new(dist / TWEEN_SPEED, Enum.EasingStyle.Linear)
+            _activeTween = TweenService:Create(plrRoot, info, {CFrame = targetCF})
+            _activeTween:Play()
+            _activeTween.Completed:Connect(function()
+                toggleNoclip(false)
+            end)
+        end
     end
-
-    stabilizeMob(boss)
 end
 
 -- ==========================================
