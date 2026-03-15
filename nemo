@@ -1005,77 +1005,58 @@ local function getChestsSorted()
 end
 
 local function HopServer()
-    StatusLabel.Text = "Status: Đang tìm server ngon..."
+    StatusLabel.Text = "Status: Đang hop server..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
 
-    -- Đánh dấu server hiện tại đã visit TRƯỚC khi fetch
-    -- → server mới load lên sẽ không bao giờ chọn lại server này
+    -- Ghi server hiện tại vào blacklist ngay lập tức
     VisitedServers[game.JobId] = os.time()
     pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
 
-    local function fetchPage(cursor)
-        local url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
-            .. (cursor and cursor ~= "" and ("&cursor=" .. cursor) or "")
-        local ok, res = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
-        if ok and res and res.data then return res.data, res.nextPageCursor end
-        return nil, nil
+    -- Fetch 1 trang duy nhất — đủ 100 server, nhanh nhất
+    local ok, res = pcall(function()
+        return HttpService:JSONDecode(game:HttpGet(
+            "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
+        ))
+    end)
+    if not ok or not res or not res.data then
+        StatusLabel.Text = "Status: Fetch thất bại, thử lại..."
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        task.wait(5)
+        return
     end
 
-    local function collectValid(servers)
-        local valid = {}
-        for _, s in ipairs(servers) do
-            local playing = s.playing or 0
-            local maxP    = s.maxPlayers or 0
-            -- Bỏ server hiện tại và server đang cooling down
-            if s.id ~= game.JobId
-            and playing > 0
-            and (maxP - playing) >= 2
-            and not isServerCoolingDown(s.id) then
-                table.insert(valid, s)
+    local best = nil
+    for _, s in ipairs(res.data) do
+        local playing = s.playing or 0
+        local maxP    = s.maxPlayers or 0
+        if s.id ~= game.JobId
+        and playing > 0
+        and (maxP - playing) >= 2
+        and not isServerCoolingDown(s.id) then
+            if not best or playing > (best.playing or 0) then
+                best = s
             end
         end
-        return valid
     end
 
-    -- Fetch tối đa 3 trang để tăng tỉ lệ tìm được server mới
-    local allServers = {}
-    local cursor = ""
-    for _ = 1, 3 do
-        local page, nextCursor = fetchPage(cursor)
-        if not page then break end
-        for _, s in ipairs(page) do table.insert(allServers, s) end
-        if not nextCursor or nextCursor == "" then break end
-        cursor = nextCursor
-    end
-
-    local validServers = collectValid(allServers)
-
-    -- Nếu không tìm được → xóa toàn bộ cache cũ rồi thử lại 1 lần nữa
-    if #validServers == 0 then
-        StatusLabel.Text = "Status: Xóa cache, tìm lại server..."
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
-        VisitedServers = {}
-        VisitedServers[game.JobId] = os.time()  -- giữ server hiện tại trong blacklist
-        pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
-        local page2, _ = fetchPage("")
-        if page2 then
-            validServers = collectValid(page2)
-        end
-    end
-
-    if #validServers > 0 then
-        -- Chọn server đông nhất (nhiều rương nhất)
-        table.sort(validServers, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
-        local best = validServers[1]
-        StatusLabel.Text = string.format("Status: Hop → server %d/%d người", best.playing, best.maxPlayers)
+    if best then
+        StatusLabel.Text = string.format("Status: Hop → %d/%d người", best.playing, best.maxPlayers)
         StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-        task.wait(0.2)
         TeleportService:TeleportToPlaceInstance(PlaceId, best.id, LocalPlayer)
     else
-        -- Tuyệt đối không random — báo lỗi và chờ thay vì hop bừa
-        StatusLabel.Text = "Status: Không tìm được server, thử lại 30s..."
+        -- Cache hết hạn → xóa và hop ngay
+        VisitedServers = { [game.JobId] = os.time() }
+        pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
+        -- Pick server đầu tiên không phải server hiện tại
+        for _, s in ipairs(res.data) do
+            if s.id ~= game.JobId and (s.playing or 0) > 0 and ((s.maxPlayers or 0) - (s.playing or 0)) >= 2 then
+                TeleportService:TeleportToPlaceInstance(PlaceId, s.id, LocalPlayer)
+                return
+            end
+        end
+        StatusLabel.Text = "Status: Không tìm được server, thử lại..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-        task.wait(30)
+        task.wait(10)
     end
 end
 
