@@ -441,6 +441,7 @@ local function executeFastAttack(toolTipFilter)
 end
 
 -- Hit registration fallback với XOR seed (anti-cheat bypass)
+local _seedCache = { value = 0, time = 0 }
 local function executeHitRegistration()
     pcall(function()
         local char = Player.Character; if not char then return end
@@ -468,7 +469,13 @@ local function executeHitRegistration()
         if wType ~= "Melee" and wType ~= "Sword" then return end
 
         local Modules = RS:FindFirstChild("Modules"); local Net2 = Modules and Modules:FindFirstChild("Net"); if not Net2 then return end
-        local seed = 0; pcall(function() seed = Net2.seed:InvokeServer() end)
+        -- Cache seed 2s để tránh spam InvokeServer mỗi 0.1s khi đang đánh boss
+        local seed = _seedCache.value
+        if tick() - _seedCache.time > 2 then
+            pcall(function() seed = Net2.seed:InvokeServer() end)
+            _seedCache.value = seed
+            _seedCache.time  = tick()
+        end
         local attackRemote2 = Net2:FindFirstChild("RE/RegisterAttack")
         local hitRemote2    = Net2:FindFirstChild("RE/RegisterHit")
         if not attackRemote2 or not hitRemote2 then return end
@@ -737,32 +744,47 @@ local function StoreFruit()
 end
 
 -- ==========================================
--- ==========================================
 -- [8] LOGIC DARKBEARD
 -- ==========================================
 
 -- Fist of Darkness là Tool tạm thời (KHÔNG lưu được inventory, mất khi die/disconnect).
 -- Dùng ChildAdded để detect tức thì ngay khi rương trả về Tool, không cần poll.
 local _fistFlag = false
+
+-- Seed flag từ character hiện tại (nếu script start sau khi char đã load)
+local function _seedFistFlagFromChar(char)
+    if char and char:FindFirstChild("Fist of Darkness") then _fistFlag = true end
+    if char then
+        char.ChildAdded:Connect(function(child)
+            if child.Name == "Fist of Darkness" then _fistFlag = true end
+        end)
+        char.ChildRemoved:Connect(function(child)
+            if child.Name == "Fist of Darkness" then
+                _fistFlag = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") ~= nil
+            end
+        end)
+    end
+end
+
 LocalPlayer.Backpack.ChildAdded:Connect(function(child)
     if child.Name == "Fist of Darkness" then _fistFlag = true end
 end)
 LocalPlayer.Backpack.ChildRemoved:Connect(function(child)
     if child.Name == "Fist of Darkness" then
-        -- Có thể vừa equip sang Character, recheck trước khi clear flag
         _fistFlag = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Fist of Darkness")) ~= nil
     end
 end)
-LocalPlayer.CharacterAdded:Connect(function(char)
-    char.ChildAdded:Connect(function(child)
-        if child.Name == "Fist of Darkness" then _fistFlag = true end
-    end)
-    char.ChildRemoved:Connect(function(child)
-        if child.Name == "Fist of Darkness" then
-            _fistFlag = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness") ~= nil
-        end
-    end)
+
+-- Fist mất hoàn toàn khi chết → clear flag tức thì khi character bị remove
+LocalPlayer.CharacterRemoving:Connect(function()
+    _fistFlag = false
 end)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    _seedFistFlagFromChar(char)
+end)
+
+-- Seed cho character đang hiện tại ngay khi script chạy
+_seedFistFlagFromChar(LocalPlayer.Character)
 
 local function HasFistOfDarkness()
     -- Fist là Tool trong Backpack/Character, KHÔNG phải Material trong server inventory.
@@ -1232,10 +1254,11 @@ end
 local function ShouldBreakChest()
     if CollectFruit and #GetDroppedFruits() > 0 then return true end
     if AutoDoughKing and PlaceId == SEA3_PLACE then
-        if GetBP("God's Chalice") or GetBP("Sweet Chalice") then return true end
+        -- Break nếu có chalice để craft, hoặc Dough King đã spawn (cần đánh ngay)
+        if GetBP("God's Chalice") or GetBP("Sweet Chalice")
+            or GetConnectionEnemies("Dough King") then return true end
     end
     if AutoDarkbeard and PlaceId == SEA2_PLACE then
-        -- Fist là Tool tạm thời, HasFistOfDarkness dùng _fistFlag (ChildAdded) + GetBP fallback
         if HasFistOfDarkness() or GetDarkbeard() then return true end
     end
     return false
