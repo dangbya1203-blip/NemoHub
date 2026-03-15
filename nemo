@@ -10,18 +10,22 @@ repeat task.wait() until game:IsLoaded() and game.Players.LocalPlayer
 local _cfg = getgenv().NemoConfig or {}
 
 -- Key check
-local _key = getgenv().NemoKey or ""
+local _key = tostring(getgenv().NemoKey or "")
 local _validKeys = getgenv().NemoValidKeys or {"tester2026"}
-if #_validKeys > 0 then
+print("[NemoHub] Key nhận được: '" .. _key .. "'")
+do
     local ok = false
     for _, k in ipairs(_validKeys) do
-        if _key == k then ok = true; break end
+        if _key == tostring(k) then ok = true; break end
     end
     if not ok then
-        while true do
-            warn("[NemoHub] ❌ Key không hợp lệ: '" .. tostring(_key) .. "'")
-            task.wait(5)
-        end
+        task.spawn(function()
+            while true do
+                warn("[NemoHub] ❌ Key không hợp lệ: '" .. _key .. "'")
+                task.wait(5)
+            end
+        end)
+        return  -- dừng hoàn toàn, không chạy gì thêm
     end
 end
 
