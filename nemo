@@ -434,7 +434,10 @@ end
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.05)
-        if _G.IsAttackingBoss then pcall(executeFastAttack) end
+        if _G.IsAttackingBoss then
+            AutoEquipMelee()
+            pcall(executeFastAttack)
+        end
     end
 end)
 
@@ -684,6 +687,30 @@ local function EquipWeapon(name)
     end
 end
 
+-- Tự động equip Melee nếu tay đang trống hoặc không cầm Melee/Sword
+local function AutoEquipMelee()
+    local char = LocalPlayer.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    -- Kiểm tra đang cầm gì
+    local current = char:FindFirstChildOfClass("Tool")
+    if current and (current.ToolTip == "Melee" or current.ToolTip == "Sword") then return end
+    -- Tìm Melee trong Backpack
+    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if tool:IsA("Tool") and tool.ToolTip == "Melee" then
+            hum:EquipTool(tool)
+            return
+        end
+    end
+    -- Fallback: Sword nếu không có Melee
+    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if tool:IsA("Tool") and tool.ToolTip == "Sword" then
+            hum:EquipTool(tool)
+            return
+        end
+    end
+end
+
 local function GetConnectionEnemies(a)
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
         if folder then
@@ -795,8 +822,12 @@ local function ActivateFistAtAltar()
 end
 
 local function GetDarkbeard()
-    for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
-        if folder then for _, enemy in ipairs(folder:GetChildren()) do if string.find(enemy.Name, "Darkbeard") then return enemy end end end
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies then
+        local boss = enemies:FindFirstChild("Darkbeard")
+        if boss and boss:FindFirstChild("Humanoid") and boss.Humanoid.Health > 0 then
+            return boss
+        end
     end
     return nil
 end
