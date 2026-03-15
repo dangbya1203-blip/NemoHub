@@ -191,6 +191,9 @@ local function isServerCoolingDown(jobId)
     return (os.time() - t) < SERVER_COOLDOWN
 end
 
+-- Flag dừng farm thủ công (nút STOP trên UI)
+local _farmStopped = false
+
 local function CreateOverlayUI()
     local existingUI = CoreGui:FindFirstChild("NemoHub_UI")
     if existingUI then existingUI:Destroy() end
@@ -240,6 +243,36 @@ local function CreateOverlayUI()
     local StatsLabel  = CreateLabel(20, true)
     local StatusLabel = CreateLabel(18)
     local TimeLabel   = CreateLabel(18)
+
+    -- Nút STOP / RESUME
+    local StopBtn = Instance.new("TextButton")
+    StopBtn.Size = UDim2.new(0, 180, 0, 38)
+    StopBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+    StopBtn.BorderSizePixel = 0
+    StopBtn.Font = Enum.Font.GothamBold
+    StopBtn.TextSize = 18
+    StopBtn.Text = "⏹ STOP FARM"
+    StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StopBtn.TextStrokeTransparency = 0.5
+    StopBtn.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    StopBtn.Parent = CenterFrame
+    Instance.new("UICorner", StopBtn).CornerRadius = UDim.new(0, 8)
+    StopBtn.MouseButton1Click:Connect(function()
+        _farmStopped = not _farmStopped
+        if _farmStopped then
+            StopBtn.Text = "▶ RESUME FARM"
+            StopBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 40)
+            StatusLabel.Text = "Status: ⏸ Đã dừng thủ công"
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+            _G.IsAttackingBoss = false
+        else
+            StopBtn.Text = "⏹ STOP FARM"
+            StopBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+            StatusLabel.Text = "Status: Tiếp tục farm..."
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+    end)
+
     return StatsLabel, StatusLabel, TimeLabel
 end
 
@@ -746,20 +779,38 @@ end
 -- ==========================================
 
 -- Fist of Darkness là Tool tạm thời (mất khi die/disconnect, không lưu inventory).
--- Dùng background polling thread set flag mỗi 0.05s để detect tức thì
--- ngay cả khi main loop đang bận bên trong TouchChest.
+-- Dùng partial name match (case-insensitive) vì tên thực tế trong game
+-- có thể khác với "Fist of Darkness" (viết hoa chữ cái, space, v.v.)
+local function _scanForFist(parent)
+    if not parent then return nil end
+    for _, v in ipairs(parent:GetChildren()) do
+        if string.find(string.lower(v.Name), "fist") then return v end
+    end
+    return nil
+end
+
+-- Background polling thread set flag mỗi 0.05s để break tức thì
+-- kể cả khi main loop đang bận bên trong TouchChest
 local _hasFist = false
 task.spawn(function()
     while true do
-        _hasFist = GetBP("Fist of Darkness") ~= nil
+        _hasFist = (_scanForFist(LocalPlayer.Backpack) or _scanForFist(LocalPlayer.Character)) ~= nil
         task.wait(0.05)
     end
 end)
 
 local function HasFistOfDarkness()
-    -- Đọc flag (set bởi background thread mỗi 0.05s)
-    -- Fallback GetBP trực tiếp phòng thread chưa chạy vòng đầu
-    return _hasFist or GetBP("Fist of Darkness") ~= nil
+    if _hasFist then return true end
+    -- Fallback trực tiếp phòng thread chưa chạy vòng đầu
+    return (_scanForFist(LocalPlayer.Backpack) or _scanForFist(LocalPlayer.Character)) ~= nil
+end
+
+local function EquipFistDirect()
+    -- Equip dùng cùng scan phòng tên khác exact string
+    local fist = _scanForFist(LocalPlayer.Backpack)
+    if fist and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid:EquipTool(fist)
+    end
 end
 
 -- Background pollers cho Dough King (Sea 3) — detect tức thì khi có chalice/boss spawn
@@ -774,10 +825,7 @@ task.spawn(function()
 end)
 
 local function EquipFist()
-    local fist = LocalPlayer.Backpack:FindFirstChild("Fist of Darkness")
-    if fist and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid:EquipTool(fist)
-    end
+    EquipFistDirect()
 end
 
 -- Vị trí Dark Arena (bàn thờ triệu hồi Darkbeard) ở Sea 2
@@ -1229,6 +1277,9 @@ local function main()
     AutoSelectTeam()
 
     while true do
+        -- Dừng thủ công qua nút STOP trên UI
+        if _farmStopped then task.wait(0.5); continue end
+
         local char = LocalPlayer.Character
         local RootPart = char and char:FindFirstChild("HumanoidRootPart")
         if not RootPart then task.wait(1); continue end
@@ -1312,7 +1363,7 @@ local function main()
         end
 
         for _, Chest in ipairs(Chests) do
-            if ShouldBreakChest() then break end
+            if _farmStopped or ShouldBreakChest() then break end
             char = LocalPlayer.Character
             RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
@@ -1321,7 +1372,7 @@ local function main()
                 IgnoredChests[Chest] = tick()
                 -- Yield 0.15s để server kịp trả item về Backpack trước khi check lại
                 task.wait(0.15)
-                if ShouldBreakChest() then break end
+                if _farmStopped or ShouldBreakChest() then break end
             end
         end
 
