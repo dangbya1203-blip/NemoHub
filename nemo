@@ -359,16 +359,14 @@ local function stabilizeMob(mob)
     _stabilized[mob] = true
     pcall(function()
         local hum = mob:FindFirstChildOfClass("Humanoid")
-        local anim = mob:FindFirstChildOfClass("Animator") or mob:FindFirstChild("Animate")
-        if anim then anim:Destroy() end
         if hum then
             hum.WalkSpeed = 0
             hum.JumpPower = 0
         end
+        -- KHÔNG destroy Animator → boss vẫn nhận damage bình thường từ server
         for _, part in pairs(mob:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
-                part.Massless   = true
                 pcall(function() part:SetNetworkOwner(nil) end)
             end
         end
@@ -405,7 +403,7 @@ local function executeFastAttack()
                 if mob ~= char then
                     local hrp  = mob:FindFirstChild("HumanoidRootPart")
                     local head = mob:FindFirstChild("Head")
-                    if hrp and head and isAlive(mob) and (hrp.Position - root.Position).Magnitude <= 65 then
+                    if hrp and head and isAlive(mob) and (hrp.Position - root.Position).Magnitude <= 150 then
                         if not firstHead then firstHead = head end
                         for _, part in ipairs(mob:GetChildren()) do
                             if part:IsA("BasePart") then
@@ -443,7 +441,25 @@ task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.05)
         if _G.IsAttackingBoss then
-            AutoEquipMelee()
+            -- Equip melee inline (AutoEquipMelee defined sau section này)
+            pcall(function()
+                local char = Player.Character
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not hum then return end
+                local cur = char:FindFirstChildOfClass("Tool")
+                if not cur or (cur.ToolTip ~= "Melee" and cur.ToolTip ~= "Sword") then
+                    for _, t in ipairs(Player.Backpack:GetChildren()) do
+                        if t:IsA("Tool") and t.ToolTip == "Melee" then
+                            hum:EquipTool(t); return
+                        end
+                    end
+                    for _, t in ipairs(Player.Backpack:GetChildren()) do
+                        if t:IsA("Tool") and t.ToolTip == "Sword" then
+                            hum:EquipTool(t); return
+                        end
+                    end
+                end
+            end)
             pcall(executeFastAttack)
         end
     end
@@ -487,7 +503,7 @@ task.spawn(function()
             if not bossHRP or not bossHum or bossHum.Health <= 0 then return end
             local dist = (bossHRP.Position - plrHRP.Position).Magnitude
             if dist <= 80 and dist > 5 then
-                bossHRP.CFrame = bossHRP.CFrame:Lerp(plrHRP.CFrame, 0.35)
+                bossHRP.CFrame = CFrame.new(bossHRP.Position:Lerp(plrHRP.Position, 0.35))
                 antiKnockback(bossHRP)
                 stabilizeMob(_bossTarget)
             end
@@ -658,6 +674,8 @@ local function TweenPlayer(goalCF)
     _activeTween:Play()
     _activeTween.Completed:Wait()
     toggleNoclip(false)
+    -- Destroy BodyVelocity ngay sau khi tween xong — không để lơ lửng
+    _removeBodyVelocity(hrp)
 end
 
 -- SafeTweenTP alias → TweenPlayer (không đổi các chỗ gọi cũ)
@@ -784,49 +802,27 @@ local function FindDarkbeardAltar()
     return nil
 end
 
+-- ActivateFistAtAltar: Đúng theo bonehub/redz pattern
+-- Chỉ cần TP tới tọa độ + equip fist trong tay → game tự detect và spawn boss
+-- KHÔNG cần invoke CommF_ hay tìm altar
 local function ActivateFistAtAltar()
+    if not HasFistOfDarkness() then return end  -- guard
     local char = LocalPlayer.Character; if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
 
-    -- [1] Equip fist trước
-    StatusLabel.Text = "Darkbeard: Trang bị Fist of Darkness..."
+    StatusLabel.Text = "Darkbeard: Equip fist + TP tới arena..."
     StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
-    EquipFist(); task.wait(0.3)
 
-    -- [2] TP tới arena
-    StatusLabel.Text = "Darkbeard: Đang tới Dark Arena..."
-    StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
-    SafeTweenTP(jitterCF(DARK_ARENA_CF, 1.5)); task.wait(0.4)
+    EquipFist()
+    task.wait(0.3)
+    SafeTweenTP(DARK_ARENA_CF)
+    task.wait(0.5)
 
-    -- [3] Tìm và đứng lên altar
-    local altar = FindDarkbeardAltar()
-    local freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if altar and freshRoot then
-        StatusLabel.Text = "Darkbeard: Đứng lên Altar..."
-        StatusLabel.TextColor3 = Color3.fromRGB(150, 50, 255)
-        SafeTweenTP(altar.CFrame * CFrame.new(0, 2, 0), 80)
-        task.wait(0.2)
-        -- refetch sau tween
-        freshRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        pcall(function()
-            if firetouchinterest and freshRoot then
-                firetouchinterest(freshRoot, altar, 0)
-                task.wait(hrand(0.1, 0.15))
-                firetouchinterest(freshRoot, altar, 1)
-            end
-        end)
-        task.wait(0.1)
-    end
+    -- Re-equip sau tween (có thể bị unequip khi tp)
+    EquipFist()
+    task.wait(0.2)
 
-    -- [4] Invoke remote spawn - retry 3 lần
-    StatusLabel.Text = "Darkbeard: Gọi spawn boss..."
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
-    for _ = 1, 3 do
-        pcall(function() RS.Remotes.CommF_:InvokeServer("DarkBeardAltar") end)
-        pcall(function() RS.Remotes.CommF_:InvokeServer("DarkArena") end)
-        task.wait(0.3)
-        if GetDarkbeard() then break end
-    end
+    StatusLabel.Text = "Darkbeard: Chờ boss spawn (equip fist tại arena)..."
+    StatusLabel.TextColor3 = Color3.fromRGB(200, 100, 255)
 end
 
 -- ================================================================
@@ -858,15 +854,29 @@ local function _isBossCandidate(obj)
 end
 
 local function _tryRegisterBoss(obj)
-    if not IsInSea("sea2") or _darkbeardRef then return end
+    if not IsInSea("sea2") then return end
+    if _darkbeardRef and _darkbeardRef.Parent then return end  -- đã có ref hợp lệ
+    if not obj or not obj:IsA("Model") then return end
+    -- Fast-path: tên khớp ngay không cần spawn
+    local nameLower = obj.Name:lower()
+    if nameLower:find("darkbeard") then
+        local hum = obj:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            _darkbeardRef = obj
+            warn("[NemoHub] ✅ Darkbeard found (name match):", obj.Name)
+            hum.Died:Connect(function() task.wait(1); _darkbeardRef = nil end)
+            obj.AncestryChanged:Connect(function() if not obj.Parent then _darkbeardRef = nil end end)
+            return
+        end
+    end
+    -- Slow-path: check MaxHealth trong task.spawn
     task.spawn(function()
         if not _isBossCandidate(obj) then return end
+        if _darkbeardRef and _darkbeardRef.Parent then return end
         _darkbeardRef = obj
         local hum = obj:FindFirstChildOfClass("Humanoid")
-        warn("[NemoHub] ✅ Boss found:", obj.Name,
-             "| Parent:", tostring(obj.Parent),
-             "| MaxHP:", hum and hum.MaxHealth or "?")
-        -- Dọn ref khi boss chết/despawn
+        warn("[NemoHub] ✅ Boss found (HP match):", obj.Name,
+             "MaxHP:", hum and hum.MaxHealth or "?")
         if hum then
             hum.Died:Connect(function() task.wait(1); _darkbeardRef = nil end)
         end
@@ -931,7 +941,7 @@ end
 
 local lastDodge    = 0
 local dodgeIndex   = 1
-local dodgeOffsets = { CFrame.new(0, 30, 25), CFrame.new(25, 30, 0), CFrame.new(-25,30, 0), CFrame.new(0, 30, -25) }
+local dodgeOffsets = { CFrame.new(0, 5, 15), CFrame.new(15, 5, 0), CFrame.new(-15, 5, 0), CFrame.new(0, 5, -15) }
 
 local function PositionOnBoss(boss)
     local bossHRP = boss:FindFirstChild("HumanoidRootPart")
@@ -958,7 +968,7 @@ local function PositionOnBoss(boss)
 
     -- Chỉ fire tween khi drift > 25 studs VÀ không có tween đang chạy
     -- Không dùng Completed:Wait() → không block main loop
-    if dist > 25 then
+    if dist > 60 then
         if not _activeTween or _activeTween.PlaybackState ~= Enum.PlaybackState.Playing then
             toggleNoclip(true)
             _ensureBodyVelocity(plrRoot)
@@ -968,8 +978,16 @@ local function PositionOnBoss(boss)
             _activeTween:Play()
             _activeTween.Completed:Connect(function()
                 toggleNoclip(false)
+                -- Destroy BodyVelocity sau khi đến nơi
+                local c = LocalPlayer.Character
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                _removeBodyVelocity(r)
             end)
         end
+    else
+        -- Đã đứng gần boss → destroy BodyVelocity ngay để không lơ lửng
+        _removeBodyVelocity(plrRoot)
+        toggleNoclip(false)
     end
 end
 
@@ -1275,8 +1293,6 @@ local function main()
                         retryTick = tick()
                         ActivateFistAtAltar()
                     end
-                    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
-                    if hum then hum.Jump = true end
                     task.wait(0.5)
                 end
                 continue
