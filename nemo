@@ -829,36 +829,93 @@ local function ActivateFistAtAltar()
     end
 end
 
--- Event-driven boss detection — không polling, bắt ngay khi spawn
+-- ================================================================
+-- BOSS DETECTION: All methods combined
+-- 1. ChildAdded event realtime (workspace.Enemies)
+-- 2. Tên hardcode "Darkbeard" (exact + lowercase)
+-- 3. MaxHealth >= 100k (không cần biết tên)
+-- 4. Fallback: workspace direct, ReplicatedStorage (risehub pattern)
+-- 5. Poll 0.5s backup phòng event miss
+-- ================================================================
 local _darkbeardRef = nil
+local BOSS_MIN_HP   = 100000  -- Darkbeard ~305k HP, mob thường < 50k
 
-local function _checkDarkbeardObj(obj)
-    if obj and obj.Name == "Darkbeard" and obj:IsA("Model") then
-        local hum = obj:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health > 0 then
-            _darkbeardRef = obj
-            -- Dọn ref khi boss chết hoặc despawn
-            hum.Died:Connect(function() _darkbeardRef = nil end)
-            obj.AncestryChanged:Connect(function()
-                if not obj.Parent then _darkbeardRef = nil end
-            end)
-        end
+-- Kiểm tra 1 model có phải boss không (tên + HP)
+local function _isBossCandidate(obj)
+    if not obj or not obj:IsA("Model") then return false end
+    local hum = obj:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    -- Method 1: tên chính xác
+    local nameLower = obj.Name:lower()
+    if nameLower == "darkbeard" or nameLower:find("darkbeard") then return true end
+    -- Method 2: MaxHealth cao (chờ replicate tối đa 1s)
+    if hum.MaxHealth < BOSS_MIN_HP then
+        local t = tick()
+        repeat task.wait(0.1) until hum.MaxHealth >= BOSS_MIN_HP or tick()-t > 1
     end
+    if hum.MaxHealth >= BOSS_MIN_HP then return true end
+    return false
 end
 
--- Scan ngay lúc init (boss có thể đã spawn trước khi script chạy)
-local _enemyFolder = workspace:FindFirstChild("Enemies")
-if _enemyFolder then
-    for _, v in ipairs(_enemyFolder:GetChildren()) do _checkDarkbeardObj(v) end
-    _enemyFolder.ChildAdded:Connect(_checkDarkbeardObj)
+local function _tryRegisterBoss(obj)
+    if not IsInSea("sea2") or _darkbeardRef then return end
+    task.spawn(function()
+        if not _isBossCandidate(obj) then return end
+        _darkbeardRef = obj
+        local hum = obj:FindFirstChildOfClass("Humanoid")
+        warn("[NemoHub] ✅ Boss found:", obj.Name,
+             "| Parent:", tostring(obj.Parent),
+             "| MaxHP:", hum and hum.MaxHealth or "?")
+        -- Dọn ref khi boss chết/despawn
+        if hum then
+            hum.Died:Connect(function() task.wait(1); _darkbeardRef = nil end)
+        end
+        obj.AncestryChanged:Connect(function()
+            if not obj.Parent then _darkbeardRef = nil end
+        end)
+    end)
 end
--- Chờ folder nếu chưa có
+
+-- [M1] workspace.Enemies ChildAdded + scan init
 task.spawn(function()
-    if not _enemyFolder then
-        _enemyFolder = workspace:WaitForChild("Enemies", 30)
-        if _enemyFolder then
-            for _, v in ipairs(_enemyFolder:GetChildren()) do _checkDarkbeardObj(v) end
-            _enemyFolder.ChildAdded:Connect(_checkDarkbeardObj)
+    local ef = workspace:FindFirstChild("Enemies") or workspace:WaitForChild("Enemies", 30)
+    if not ef then return end
+    for _, v in ipairs(ef:GetChildren()) do _tryRegisterBoss(v) end
+    ef.ChildAdded:Connect(_tryRegisterBoss)
+end)
+
+-- [M2] workspace direct ChildAdded (một số server spawn thẳng vào workspace)
+workspace.ChildAdded:Connect(function(obj)
+    if IsInSea("sea2") then _tryRegisterBoss(obj) end
+end)
+
+-- [M3] ReplicatedStorage fallback (risehub pattern)
+task.spawn(function()
+    RS.ChildAdded:Connect(function(obj)
+        if IsInSea("sea2") and obj:FindFirstChild("HumanoidRootPart") then
+            _tryRegisterBoss(obj)
+        end
+    end)
+end)
+
+-- [M4] Poll 0.5s backup — phòng trường hợp event miss
+task.spawn(function()
+    while getgenv().NemoRunning do
+        task.wait(0.5)
+        if not IsInSea("sea2") or _darkbeardRef then continue end
+        -- Scan workspace.Enemies
+        local ef = workspace:FindFirstChild("Enemies")
+        if ef then
+            for _, v in ipairs(ef:GetChildren()) do
+                if not _darkbeardRef then _tryRegisterBoss(v) end
+            end
+        end
+        -- Scan workspace direct
+        for _, v in ipairs(workspace:GetChildren()) do
+            if not _darkbeardRef and v:IsA("Model") then
+                local nameLower = v.Name:lower()
+                if nameLower:find("darkbeard") then _tryRegisterBoss(v) end
+            end
         end
     end
 end)
