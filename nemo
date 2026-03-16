@@ -13,7 +13,7 @@ for _, k in ipairs({"tester2026"}) do
 end
 if not _keyValid then
     task.spawn(function()
-        while true do warn("[NemoHub] Key khong hop le: '" .. _key .. "'"); task.wait(5) end
+        while true do warn("[NemoHub] Invalid key: '" .. _key .. "'"); task.wait(5) end
     end)
     return
 end
@@ -24,7 +24,7 @@ local JoinTeam          = _cfg.JoinTeam     or "Pirates"
 local CollectFruit      = _cfg.CollectFruit ~= nil and _cfg.CollectFruit or true
 local StopOnItem        = _cfg.StopOnItem   ~= nil and _cfg.StopOnItem   or true
 local TP_JITTER         = _cfg.TPJitter     or 0.55
-local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 1.5
+local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 0.5
 
 local Players           = game:GetService("Players")
 local TeleportService   = game:GetService("TeleportService")
@@ -95,7 +95,7 @@ task.spawn(function()
         task.wait(10)
         local now = tick()
         for chest, t in pairs(IgnoredChests) do
-            if not chest or not chest.Parent or (now - t > CHEST_IGNORE_TIME) then
+            if not chest.Parent or (now - t > CHEST_IGNORE_TIME) then
                 IgnoredChests[chest] = nil
             end
         end
@@ -241,18 +241,6 @@ task.spawn(function()
     end)
 end)
 
-local _stabilized = setmetatable({}, {__mode="k"})
-local function stabilizeMob(mob)
-    if _stabilized[mob] then return end
-    _stabilized[mob] = true
-    pcall(function()
-        local hum = mob:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = 0; hum.JumpPower = 0 end
-        for _, p in pairs(mob:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false; pcall(function() p:SetNetworkOwner(nil) end) end
-        end
-    end)
-end
 
 local _targets = {}
 local _pool = {}
@@ -376,13 +364,26 @@ end)
 
 -- === MOVEMENT ===
 local function getCharacter()
-    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-    char:WaitForChild("HumanoidRootPart")
+    local char = LocalPlayer.Character
+    if not char then
+        local conn; local done = false
+        conn = LocalPlayer.CharacterAdded:Connect(function(c) char = c; done = true end)
+        local t = tick()
+        while not done and (tick() - t < 10) do task.wait(0.1) end
+        conn:Disconnect()
+    end
+    if not char then return nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        local ok = pcall(function() char:WaitForChild("HumanoidRootPart", 5) end)
+        if not ok then return nil end
+    end
     return char
 end
 local function toggleNoclip(on)
     pcall(function()
         local char = getCharacter()
+        if not char then return end
         for _, v in ipairs(char:GetChildren()) do if v:IsA("Part") then v.CanCollide = not on end end
         local hum = char:FindFirstChild("Humanoid")
         if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Seated, not on) end
@@ -403,7 +404,7 @@ local function _removeBV(hrp)
     if bp then bp:Destroy() end
 end
 
-local function TweenPlayer(goalCF)
+local function TweenPlayer(goalCF, ignoreStop)
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
@@ -416,10 +417,9 @@ local function TweenPlayer(goalCF)
     _ensureBV(hrp)
     _activeTween = TweenService:Create(hrp, TweenInfo.new(dist/TWEEN_SPEED, Enum.EasingStyle.Linear), {CFrame=goalCF})
     _activeTween:Play()
-    -- Wait with HRP alive check
     local done = false
     _activeTween.Completed:Connect(function() done = true end)
-    while not done and getgenv().NemoRunning do
+    while not done and (ignoreStop or getgenv().NemoRunning) do
         task.wait(0.1)
         local c2 = LocalPlayer.Character
         local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
@@ -436,7 +436,8 @@ local function SafeTweenTP(goalCF) TweenPlayer(goalCF) end
 
 local function Teleport(Goal, Speed)
     local char = getCharacter()
-    local RootPart = char and char:FindFirstChild("HumanoidRootPart")
+    if not char then return end
+    local RootPart = char:FindFirstChild("HumanoidRootPart")
     if not RootPart then return end
     if InstantTP then RootPart.CFrame = Goal; return end
     Speed = Speed or MaxSpeed
@@ -455,16 +456,14 @@ local function Teleport(Goal, Speed)
     toggleNoclip(false)
 end
 
-local replicated = ReplicatedStorage
-
 local function GetBP(name)
     return LocalPlayer.Backpack:FindFirstChild(name) or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild(name))
 end
 
 -- === STOP ITEMS ===
 local STOP_ITEMS = {
-    ["Fist of Darkness"] = { pos = CFrame.new(-429.54, 71.76, 1836.18), seaKey = "sea2" },
-    ["God's Chalice"]    = { pos = CFrame.new(-290.73, 6.72, 5343.55),  seaKey = "sea3" },
+    ["Fist of Darkness"] = { pos = CFrame.new(-5.29, 15.12, 6218.32),   seaKey = "sea2" }, -- Cafe sea2
+    ["God's Chalice"]    = { pos = CFrame.new(-3013.5, 30.4, -4609.9),  seaKey = "sea3" }, -- Castle of the Sea sea3
 }
 local SEA_GATES = {
     sea2 = {
@@ -484,17 +483,18 @@ local SEA_GATES = {
 local function NavigateToSafeZone(itemName)
     local data = STOP_ITEMS[itemName]
     if not data then return end
-    StatusLabel.Text = "Ban tim duoc: " .. itemName .. " - Di chuyen vung an toan..."
+    StatusLabel.Text = "Found: " .. itemName .. " - Moving to safe zone..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
-    warn("[NemoHub] Ban tim duoc: " .. itemName)
+    warn("[NemoHub] Found rare item: " .. itemName)
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then TweenPlayer(data.pos); return end
+    if not hrp then TweenPlayer(data.pos, true); return end
     if (hrp.Position - data.pos.Position).Magnitude <= 200 then
-        StatusLabel.Text = "Ban tim duoc: " .. itemName
+        StatusLabel.Text = "Found: " .. itemName .. " (already safe)"
         StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
         return
     end
+    -- Try nearest sea gate first
     local gates = SEA_GATES[data.seaKey] or {}
     local nearGate, nearDist = nil, math.huge
     for _, gv3 in ipairs(gates) do
@@ -509,8 +509,9 @@ local function NavigateToSafeZone(itemName)
         char = LocalPlayer.Character; hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp and (hrp.Position - before).Magnitude > 50 then gateOk = true end
     end
-    if not gateOk then TweenPlayer(data.pos) end
-    StatusLabel.Text = "Ban tim duoc: " .. itemName
+    -- Always tween to exact safe zone pos regardless of gate result
+    TweenPlayer(data.pos, true)
+    StatusLabel.Text = "Found: " .. itemName .. " (safe zone reached)"
     StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
 end
 
@@ -529,34 +530,12 @@ task.spawn(function()
 end)
 
 -- === INVENTORY ===
-local _invCache = { data = nil, time = 0 }
-local function GetM(name)
-    if not _invCache.data or (tick() - _invCache.time > 3) then
-        local ok, r = pcall(function() return replicated.Remotes.CommF_:InvokeServer("getInventory") end)
-        _invCache.data = (ok and r) or _invCache.data or {}
-        _invCache.time = tick()
-    end
-    for _, tab in pairs(_invCache.data) do
-        if type(tab) == "table" and tab.Type == "Material" and tab.Name == name then return tab.Count or 0 end
-    end
-    return 0
-end
-local function GetConnectionEnemies(a)
-    for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
-        if folder then
-            for _, v in pairs(folder:GetChildren()) do
-                if v:IsA("Model") and ((typeof(a) == "table" and table.find(a,v.Name)) or v.Name == a)
-                and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then return v end
-            end
-        end
-    end
-end
 local function StoreFruit()
     local function Check(parent)
         for _, item in ipairs(parent:GetChildren()) do
             if item:FindFirstChild("EatRemote",true) or string.find(string.lower(item.Name),"fruit") then
                 local fn = item:GetAttribute("OriginalName") or string.gsub(item.Name," Fruit","")
-                pcall(function() replicated.Remotes.CommF_:InvokeServer("StoreFruit", fn, item) end)
+                pcall(function() RS.Remotes.CommF_:InvokeServer("StoreFruit", fn, item) end)
             end
         end
     end
@@ -653,7 +632,7 @@ end
 -- === SERVER HOP ===
 local _hopFailCount = 0
 local function HopServer()
-    StatusLabel.Text = "Status: Dang hop server..."
+    StatusLabel.Text = "Status: Hopping server..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
     VisitedServers[game.JobId] = true
 
@@ -702,12 +681,12 @@ local function HopServer()
 
     if best then
         VisitedServers[best.id] = true
-        StatusLabel.Text = string.format("Status: Hop → %d/%d nguoi", best.playing or 0, best.maxPlayers or 0)
+        StatusLabel.Text = string.format("Status: Hopping → %d/%d players", best.playing or 0, best.maxPlayers or 0)
         StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
         TeleportService:TeleportToPlaceInstance(PlaceId, best.id, LocalPlayer)
     else
         local waitTime = math.min(5 * _hopFailCount, 30)
-        StatusLabel.Text = "Status: Khong tim duoc server, thu lai sau " .. waitTime .. "s..."
+        StatusLabel.Text = "Status: No server found, retrying in " .. waitTime .. "s..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         task.wait(math.max(waitTime, 5))
     end
@@ -726,7 +705,6 @@ local function jumpIntoChest(RP, Chest, maxA)
         local ad = hrand(1.5, 2.5)
         root.CFrame = Chest.CFrame * CFrame.new(math.cos(angle)*ad, 1.5, math.sin(angle)*ad)
         RunService.Heartbeat:Wait()
-        hum.Jump = true
         pcall(function() root.AssemblyLinearVelocity = (Chest.Position - root.Position).Unit * 28 end)
         task.wait(0.06)
         root.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
@@ -743,25 +721,21 @@ local function TouchChest(RP, Chest)
     if not Chest or not Chest.Parent then return end
     if InstantTP then
         RP.CFrame = jitterCF(Chest.CFrame * CFrame.new(0, 0.5, 0))
-        task.wait(hrand(0.04, 0.07))
         local fired = false
         pcall(function()
             if firetouchinterest then
                 firetouchinterest(RP, Chest, 0)
-                task.wait(hrand(0.08, 0.14))
+                task.wait(hrand(0.05, 0.08))
                 firetouchinterest(RP, Chest, 1)
                 fired = true
             end
         end)
-        -- Fallback: jitter again + retry touch once
-        if not fired or (Chest and Chest.Parent) then
-            if not fired then jumpIntoChest(RP, Chest, 2) end
-        end
+        if not fired then jumpIntoChest(RP, Chest, 2) end
     else
         Teleport(Chest.CFrame)
         pcall(function()
             if firetouchinterest then
-                firetouchinterest(RP, Chest, 0); task.wait(0.06); firetouchinterest(RP, Chest, 1)
+                firetouchinterest(RP, Chest, 0); task.wait(0.05); firetouchinterest(RP, Chest, 1)
             end
         end)
         RunService.Heartbeat:Wait()
@@ -769,28 +743,32 @@ local function TouchChest(RP, Chest)
 end
 
 -- === FRUIT COLLECTION ===
-local function GrabFruit(RP, fruit)
+local function GrabFruit(fruit)
     if not fruit or not fruit.Parent then return end
     local handle = fruit:FindFirstChild("Handle")
     if not handle then return end
-    -- Only bother if within reasonable range
-    local dist = (RP.Position - handle.Position).Magnitude
-    if dist > 800 then return end
-    SafeTweenTP(jitterCF(handle.CFrame, 0.3))
-    local fc  = LocalPlayer.Character
-    local fr  = fc and fc:FindFirstChild("HumanoidRootPart")
+    local fc = LocalPlayer.Character
+    local fr = fc and fc:FindFirstChild("HumanoidRootPart")
     if not fr then return end
-    -- Two touch attempts
+    local dist = (fr.Position - handle.Position).Magnitude
+    if dist > 800 then return end
+    -- Instant TP thay vì tween — fruit despawn nhanh
+    fr.CFrame = jitterCF(handle.CFrame * CFrame.new(0, 0.5, 0), 0.3)
+    task.wait(0.05)
+    -- Re-fetch sau TP
+    fc = LocalPlayer.Character
+    fr = fc and fc:FindFirstChild("HumanoidRootPart")
+    if not fr then return end
     for _ = 1, 2 do
         if not fruit or not fruit.Parent then break end
         pcall(function()
             if firetouchinterest then
                 firetouchinterest(fr, handle, 0)
-                task.wait(hrand(0.08, 0.14))
+                task.wait(0.05)
                 firetouchinterest(fr, handle, 1)
             end
         end)
-        task.wait(hrand(0.2, 0.4))
+        task.wait(hrand(0.08, 0.12))
     end
     StoreFruit()
 end
@@ -808,10 +786,9 @@ local function main()
             local fruits = GetDroppedFruits()
             if #fruits > 0 then
                 _G.IsAttackingBoss = false
-                StatusLabel.Text = "Status: Phat hien Trai! Dang lum..."
+                StatusLabel.Text = "Status: Fruit detected! Collecting..."
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
-                GrabFruit(RootPart, fruits[1])
-                task.wait(0.3)
+                GrabFruit(fruits[1])
                 continue
             end
         end
@@ -822,41 +799,25 @@ local function main()
         local totalChests = #Chests
 
         if totalChests == 0 then
-            StatusLabel.Text = "Status: Khong co ruong, cho 3s roi hop..."
+            StatusLabel.Text = "Status: No chests found, hopping..."
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-            local t = tick() + 3
-            while tick() < t and getgenv().NemoRunning do
-                if CollectFruit and #GetDroppedFruits() > 0 then break end
-                pcall(function()
-                    VirtualUser:CaptureController()
-                    VirtualUser:ClickButton2(Vector2.new(math.random(200,600), math.random(200,500)))
-                end)
-                task.wait(0.8)
-            end
-            if not getgenv().NemoRunning then continue end
             HopServer()
-            task.wait(3)
             continue
         end
 
         local mode = InstantTP and "Instant" or "Smooth"
-        StatusLabel.Text = string.format("Status: Auto Chest [%s] | Con lai: %d", mode, totalChests)
+        StatusLabel.Text = string.format("Status: Auto Chest [%s] | Remaining: %d", mode, totalChests)
         StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 
-        local batchSize = InstantTP and 15 or 5
-        local count = 0
         for _, Chest in ipairs(Chests) do
             if not getgenv().NemoRunning then break end
-            if count >= batchSize then break end
             char = LocalPlayer.Character
             RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
             if Chest and Chest.Parent and Chest:FindFirstChild("TouchInterest") then
                 TouchChest(RootPart, Chest)
                 IgnoredChests[Chest] = tick()
-                count = count + 1
-                task.wait(hrand(0.12, 0.18))
-                -- Check fruit between each chest
+                task.wait(hrand(0.05, 0.08))
                 if CollectFruit and #GetDroppedFruits() > 0 then break end
             end
         end
