@@ -1,108 +1,84 @@
--- ================================================================
--- 🏆 NEMOHUB ULTIMATE V4.7 - THE FINAL MASTERPIECE (FULL A-Z)
--- Tích hợp: Fast Attack, Anti-Ghost, Batching, Force Stop
--- ================================================================
-
 repeat task.wait() until game:IsLoaded() and game.Players.LocalPlayer
 
--- ==========================================
--- [1] KHỞI TẠO
--- ==========================================
 getgenv().NemoRunning = true
 
--- ==========================================
--- [2] CONFIG (Đọc từ loader)
--- ==========================================
 local _cfg = getgenv().NemoConfig or {}
 local _key = tostring(getgenv().NemoKey or "")
 getgenv().NemoValidKeys = nil
-local _validKeys = {"tester2026"}
-print("[NemoHub] Key nhận được: '" .. _key .. "'")
 
 local _keyValid = false
-for _, k in ipairs(_validKeys) do
+for _, k in ipairs({"tester2026"}) do
     if _key == tostring(k) then _keyValid = true; break end
 end
-
 if not _keyValid then
     task.spawn(function()
-        while true do
-            warn("[NemoHub] Key không hợp lệ: '" .. _key .. "'")
-            task.wait(5)
-        end
+        while true do warn("[NemoHub] Key khong hop le: '" .. _key .. "'"); task.wait(5) end
     end)
-    return  
+    return
 end
 
-local InstantTP     = _cfg.InstantTP     ~= nil and _cfg.InstantTP     or true
-local MaxSpeed      = _cfg.MaxSpeed      or 350
-local JoinTeam      = _cfg.JoinTeam      or "Pirates"
-local CollectFruit  = _cfg.CollectFruit  ~= nil and _cfg.CollectFruit  or true
-local RandomCFrame  = _cfg.RandomCFrame  ~= nil and _cfg.RandomCFrame  or true
-
-local HUMANIZE_MIN = _cfg.HumanizeMin or 0.06
-local HUMANIZE_MAX = _cfg.HumanizeMax or 0.10
-local TP_JITTER    = _cfg.TPJitter    or 0.55
-local ATK_RATE_MIN = _cfg.AtkRateMin  or 0.05
-local ATK_RATE_MAX = _cfg.AtkRateMax  or 0.09
+local InstantTP         = _cfg.InstantTP    ~= nil and _cfg.InstantTP    or true
+local MaxSpeed          = _cfg.MaxSpeed     or 350
+local JoinTeam          = _cfg.JoinTeam     or "Pirates"
+local CollectFruit      = _cfg.CollectFruit ~= nil and _cfg.CollectFruit or true
+local TP_JITTER         = _cfg.TPJitter     or 0.55
 local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 1.5
 
--- ==========================================
--- [3] SERVICES & BIẾN GỐC
--- ==========================================
-local Players            = game:GetService("Players")
-local TeleportService    = game:GetService("TeleportService")
-local HttpService        = game:GetService("HttpService")
-local RunService         = game:GetService("RunService")
-local ReplicatedStorage  = game:GetService("ReplicatedStorage")
-local VirtualUser        = game:GetService("VirtualUser")
-local CoreGui            = game:GetService("CoreGui")
+local Players           = game:GetService("Players")
+local TeleportService   = game:GetService("TeleportService")
+local HttpService       = game:GetService("HttpService")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService      = game:GetService("TweenService")
+local VirtualUser       = game:GetService("VirtualUser")
+local CoreGui           = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Player      = LocalPlayer
 local RS          = ReplicatedStorage
 local PlaceId     = game.PlaceId
 
--- Multi-PlaceId support (live + beta servers)
-local PlaceIds = {
-    sea1 = { 2753915549, 85211729168715 },
-}
-local function IsInSea(seaName)
-    local list = PlaceIds[seaName]
-    if not list then return false end
-    for _, id in ipairs(list) do
-        if PlaceId == id then return true end
-    end
-    return false
-end
-
 local function hrand(mn, mx) return mn + math.random() * (mx - mn) end
 local function jitterCF(cf, r)
     r = r or TP_JITTER
-    local angle = math.random() * math.pi * 2
-    local dist  = math.random() * r
-    return cf * CFrame.new(math.cos(angle) * dist, 0, math.sin(angle) * dist)
+    local a = math.random() * math.pi * 2
+    local d = math.random() * r
+    return cf * CFrame.new(math.cos(a) * d, 0, math.sin(a) * d)
 end
+local function isAlive(m) return m and m:FindFirstChild("Humanoid") and m.Humanoid.Health > 0 end
+
+_G.IsAttackingBoss = false
+
+local StatFile   = "NemoHub_Stats_" .. tostring(PlaceId) .. ".json"
+local UIStats    = { StartTime = os.time() }
+pcall(function()
+    if isfile and isfile(StatFile) then
+        local d = HttpService:JSONDecode(readfile(StatFile))
+        if type(d) == "table" then
+            UIStats = d
+            if not UIStats.StartTime or type(UIStats.StartTime) ~= "number" then UIStats.StartTime = os.time() end
+        end
+    end
+end)
+
+local VisitedServers = {}
+VisitedServers[game.JobId] = true
 
 local UncheckedChests = {}
-local FirstRun        = true
 local IgnoredChests   = {}
 local _chestsDirty    = false
+local FirstRun        = true
 
 workspace.DescendantAdded:Connect(function(obj)
     if obj:IsA("Part") and obj.Name:find("Chest") then
-        table.insert(UncheckedChests, obj)
-        _chestsDirty = true
+        table.insert(UncheckedChests, obj); _chestsDirty = true
     end
 end)
-
 workspace.DescendantRemoving:Connect(function(obj)
     if obj:IsA("Part") and obj.Name:find("Chest") then
-        _chestsDirty = true
-        IgnoredChests[obj] = nil
+        _chestsDirty = true; IgnoredChests[obj] = nil
     end
 end)
-
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(10)
@@ -115,21 +91,12 @@ task.spawn(function()
     end
 end)
 
-_G.IsAttackingBoss = false
-
--- ==========================================
--- [4] AUTO REJOIN & ANTI-AFK
--- ==========================================
 task.spawn(function()
-    local promptOverlay = CoreGui:WaitForChild("RobloxPromptGui"):WaitForChild("promptOverlay")
-    promptOverlay.ChildAdded:Connect(function(child)
-        if child.Name == "ErrorPrompt" then
-            task.wait(5)
-            TeleportService:Teleport(PlaceId, LocalPlayer)
-        end
+    local overlay = CoreGui:WaitForChild("RobloxPromptGui"):WaitForChild("promptOverlay")
+    overlay.ChildAdded:Connect(function(child)
+        if child.Name == "ErrorPrompt" then task.wait(5); TeleportService:Teleport(PlaceId, LocalPlayer) end
     end)
 end)
-
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(hrand(20, 40))
@@ -140,233 +107,139 @@ task.spawn(function()
     end
 end)
 
--- ==========================================
--- [5] HỆ THỐNG LƯU TRỮ & UI
--- ==========================================
-local ServerFile = "NemoHub_Servers_" .. tostring(PlaceId) .. ".json"
-local StatFile   = "NemoHub_Stats_"   .. tostring(PlaceId) .. ".json"
-local SERVER_COOLDOWN = (_cfg.ServerCooldown or 3) * 60  -- 3 phút, đủ để chest respawn
-
-local VisitedServers = {}
-local UIStats = { StartTime = os.time() }
-
-pcall(function()
-    if isfile and isfile(ServerFile) then
-        local decoded = HttpService:JSONDecode(readfile(ServerFile))
-        if type(decoded) == "table" and not decoded[1] then
-            -- Lọc bỏ entry đã hết cooldown ngay khi load
-            local now = os.time()
-            for jobId, t in pairs(decoded) do
-                if (now - t) < SERVER_COOLDOWN then
-                    VisitedServers[jobId] = t
-                end
-            end
-        end
-    end
-end)
-pcall(function()
-    if isfile and isfile(StatFile) then
-        local decoded = HttpService:JSONDecode(readfile(StatFile))
-        if type(decoded) == "table" then
-            UIStats = decoded
-            if not UIStats.StartTime or type(UIStats.StartTime) ~= "number" then UIStats.StartTime = os.time() end
-        end
-    end
-end)
-
-VisitedServers[game.JobId] = os.time()
-pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
-
-local function isServerCoolingDown(jobId)
-    local t = VisitedServers[jobId]
-    if not t then return false end
-    return (os.time() - t) < SERVER_COOLDOWN
-end
-
 local function CreateOverlayUI()
-    local existingUI = CoreGui:FindFirstChild("NemoHub_UI")
-    if existingUI then existingUI:Destroy() end
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "NemoHub_UI"
-    ScreenGui.Parent = (gethui and gethui()) or CoreGui
-    ScreenGui.IgnoreGuiInset = true
-    local Overlay = Instance.new("Frame")
-    Overlay.Size = UDim2.new(1, 0, 1, 0)
-    Overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    Overlay.BackgroundTransparency = 0.55
-    Overlay.Parent = ScreenGui
-    local CenterFrame = Instance.new("Frame")
-    CenterFrame.Name = "Frame"
-    CenterFrame.Size = UDim2.new(0, 600, 0, 320)
-    CenterFrame.Position = UDim2.new(0.5, -300, 0.5, -160)
-    CenterFrame.BackgroundTransparency = 1
-    CenterFrame.Parent = Overlay
-    local UIListLayout = Instance.new("UIListLayout")
-    UIListLayout.Parent = CenterFrame
-    UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-    UIListLayout.Padding = UDim.new(0, 10)
-    local LogoLabel = Instance.new("TextLabel")
-    LogoLabel.Size = UDim2.new(1, 0, 0, 70)
-    LogoLabel.BackgroundTransparency = 1
-    LogoLabel.Font = Enum.Font.FredokaOne
-    LogoLabel.Text = "NemoHub"
-    LogoLabel.TextSize = 60
-    LogoLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    LogoLabel.TextStrokeTransparency = 0
-    LogoLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    LogoLabel.Parent = CenterFrame
-    local function CreateLabel(name, size, isRich)
-        local lbl = Instance.new("TextLabel")
-        lbl.Name = name
-        lbl.Size = UDim2.new(1, 0, 0, size + 10)
-        lbl.BackgroundTransparency = 1
-        lbl.Font = Enum.Font.GothamBold
-        lbl.TextSize = size
-        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-        lbl.TextStrokeTransparency = 0
-        lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-        lbl.RichText = isRich or false
-        lbl.Parent = CenterFrame
-        return lbl
+    local existing = CoreGui:FindFirstChild("NemoHub_UI")
+    if existing then existing:Destroy() end
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "NemoHub_UI"
+    sg.Parent = (gethui and gethui()) or CoreGui
+    sg.IgnoreGuiInset = true
+    local overlay = Instance.new("Frame")
+    overlay.Size = UDim2.new(1,0,1,0)
+    overlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    overlay.BackgroundTransparency = 0.55
+    overlay.Parent = sg
+    local frame = Instance.new("Frame")
+    frame.Name = "Frame"
+    frame.Size = UDim2.new(0,600,0,320)
+    frame.Position = UDim2.new(0.5,-300,0.5,-160)
+    frame.BackgroundTransparency = 1
+    frame.Parent = overlay
+    local ull = Instance.new("UIListLayout")
+    ull.Parent = frame
+    ull.SortOrder = Enum.SortOrder.LayoutOrder
+    ull.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    ull.VerticalAlignment = Enum.VerticalAlignment.Center
+    ull.Padding = UDim.new(0,10)
+    local logo = Instance.new("TextLabel")
+    logo.Size = UDim2.new(1,0,0,70)
+    logo.BackgroundTransparency = 1
+    logo.Font = Enum.Font.FredokaOne
+    logo.Text = "NemoHub"
+    logo.TextSize = 60
+    logo.TextColor3 = Color3.fromRGB(255,255,255)
+    logo.TextStrokeTransparency = 0
+    logo.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+    logo.Parent = frame
+    local function MkLabel(name, size, rich)
+        local l = Instance.new("TextLabel")
+        l.Name = name; l.Size = UDim2.new(1,0,0,size+10)
+        l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+        l.TextSize = size; l.TextColor3 = Color3.fromRGB(255,255,255)
+        l.TextStrokeTransparency = 0; l.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+        l.RichText = rich or false; l.Parent = frame; return l
     end
-    local StatsLabel  = CreateLabel("Stats", 20, true)
-    local StatusLabel = CreateLabel("Status", 18)
-    local TimeLabel   = CreateLabel("Time", 18)
-    return StatsLabel, StatusLabel, TimeLabel
+    return MkLabel("Stats",20,true), MkLabel("Status",18), MkLabel("Time",18)
 end
 
 local StatsLabel, StatusLabel, TimeLabel = CreateOverlayUI()
 
-local function GetStat(statName)
-    if LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild(statName) then return LocalPlayer.Data[statName].Value
-    elseif LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild(statName) then return LocalPlayer.leaderstats[statName].Value end
+local function GetStat(n)
+    if LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild(n) then return LocalPlayer.Data[n].Value end
+    if LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild(n) then return LocalPlayer.leaderstats[n].Value end
     return 0
 end
 local function GetRace()
-    if LocalPlayer and LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Race") then return tostring(LocalPlayer.Data.Race.Value) end
+    if LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Race") then return tostring(LocalPlayer.Data.Race.Value) end
     return "Unknown"
 end
-local function FormatNumber(n)
+local function FormatNum(n)
     if not n then return "0" end
-    if type(n) == "number" or tonumber(n) then
-        local formatted = tostring(n)
-        while true do
-            local k
-            formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", "%1,%2")
-            if k == 0 then break end
-        end
-        return formatted
-    end
-    return tostring(n)
+    local s = tostring(n)
+    while true do local k; s,k = string.gsub(s,"^(-?%d+)(%d%d%d)","%1,%2"); if k==0 then break end end
+    return s
 end
 local function GetDroppedFruits()
-    local fruits = {}
+    local t = {}
     for _, v in ipairs(workspace:GetChildren()) do
-        if string.find(string.lower(v.Name), "fruit") and v:FindFirstChild("Handle") then
-            table.insert(fruits, v)
-        end
+        if string.find(string.lower(v.Name),"fruit") and v:FindFirstChild("Handle") then table.insert(t,v) end
     end
-    return fruits
+    return t
 end
 
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(1)
-        local fruitText = "None"
-        local droppedFruits = GetDroppedFruits()
-        if #droppedFruits > 0 then
-            fruitText = droppedFruits[1]:GetAttribute("OriginalName") or string.gsub(droppedFruits[1].Name, " Fruit", "")
-        end
+        local ft = "None"
+        local df = GetDroppedFruits()
+        if #df > 0 then ft = df[1]:GetAttribute("OriginalName") or string.gsub(df[1].Name," Fruit","") end
         StatsLabel.Text = string.format(
             '<font color="rgb(255,50,50)">Level:</font> %s | <font color="rgb(255,255,0)">Beli:</font> %s | <font color="rgb(255,50,255)">Frags:</font> %s\n<font color="rgb(100,255,100)">Race:</font> %s | <font color="rgb(255,165,0)">Fruit:</font> %s',
-            tostring(GetStat("Level")), FormatNumber(GetStat("Beli")), FormatNumber(GetStat("Fragments")), tostring(GetRace()), tostring(fruitText)
+            tostring(GetStat("Level")), FormatNum(GetStat("Beli")), FormatNum(GetStat("Fragments")), tostring(GetRace()), tostring(ft)
         )
-        local elapsed = os.time() - UIStats.StartTime
-        TimeLabel.Text = string.format("Time Elapsed: %d day %d hours %d minutes %d seconds", math.floor(elapsed / 86400), math.floor((elapsed % 86400) / 3600), math.floor((elapsed % 3600) / 60), elapsed % 60)
+        local e = os.time() - UIStats.StartTime
+        TimeLabel.Text = string.format("Time Elapsed: %d day %d hours %d minutes %d seconds",
+            math.floor(e/86400), math.floor((e%86400)/3600), math.floor((e%3600)/60), e%60)
         pcall(function() if writefile then writefile(StatFile, HttpService:JSONEncode(UIStats)) end end)
     end
 end)
 
--- ==========================================
--- [6] FAST ATTACK & HIT REGISTRATION CORE
--- (Ported từ bancu: pool-based, zero GC, stabilizeMob, BringEnemy Lerp)
--- ==========================================
-local function isAlive(char) return char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 end
-local RegisterAttack, RegisterHit, hitRemote, hitRemoteId
-local CachedSeed = 0
+local RegisterAttack, RegisterHit, hitRemote, hitRemoteId, CachedSeed = nil, nil, nil, nil, 0
 
--- Setup remotes
 task.spawn(function()
     pcall(function()
-        local Modules = RS:WaitForChild("Modules", 5); if not Modules then return end
-        local Net = Modules:WaitForChild("Net", 5); if not Net then return end
-        RegisterAttack = Net:WaitForChild("RE/RegisterAttack", 5)
-        RegisterHit    = Net:WaitForChild("RE/RegisterHit", 5)
-        -- Scan secondary hitRemote với Id attribute (cloneref pattern)
-        local function scanFolder(folder)
+        local Modules = RS:WaitForChild("Modules",5); if not Modules then return end
+        local Net = Modules:WaitForChild("Net",5); if not Net then return end
+        RegisterAttack = Net:WaitForChild("RE/RegisterAttack",5)
+        RegisterHit    = Net:WaitForChild("RE/RegisterHit",5)
+        local function scanF(folder)
             if not folder then return end
-            for _, child in ipairs(folder:GetChildren()) do
-                if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
-                    hitRemote   = child
-                    hitRemoteId = child:GetAttribute("Id")
-                end
+            for _, c in ipairs(folder:GetChildren()) do
+                if c:IsA("RemoteEvent") and c:GetAttribute("Id") then hitRemote = c; hitRemoteId = c:GetAttribute("Id") end
             end
-            folder.ChildAdded:Connect(function(child)
-                if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
-                    hitRemote   = child
-                    hitRemoteId = child:GetAttribute("Id")
-                end
+            folder.ChildAdded:Connect(function(c)
+                if c:IsA("RemoteEvent") and c:GetAttribute("Id") then hitRemote = c; hitRemoteId = c:GetAttribute("Id") end
             end)
         end
-        for _, name in ipairs({"Util","Common","Remotes","Assets","FX"}) do
-            pcall(function() scanFolder(RS:WaitForChild(name, 3)) end)
+        for _, nm in ipairs({"Util","Common","Remotes","Assets","FX"}) do
+            pcall(function() scanF(RS:WaitForChild(nm,3)) end)
         end
-        -- Cache seed mỗi 2s
         while getgenv().NemoRunning do
             task.wait(2)
-            pcall(function()
-                if Net.seed then CachedSeed = Net.seed:InvokeServer() or 0 end
-            end)
+            pcall(function() if Net.seed then CachedSeed = Net.seed:InvokeServer() or 0 end end)
         end
     end)
 end)
 
--- stabilizeMob: tắt physics + animation → tiết kiệm FPS khi đánh boss
-local _stabilized = setmetatable({}, {__mode = "k"})
+local _stabilized = setmetatable({}, {__mode="k"})
 local function stabilizeMob(mob)
     if _stabilized[mob] then return end
     _stabilized[mob] = true
     pcall(function()
         local hum = mob:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = 0
-            hum.JumpPower = 0
-        end
-        -- KHÔNG destroy Animator → boss vẫn nhận damage bình thường từ server
-        for _, part in pairs(mob:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-                pcall(function() part:SetNetworkOwner(nil) end)
-            end
+        if hum then hum.WalkSpeed = 0; hum.JumpPower = 0 end
+        for _, p in pairs(mob:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false; pcall(function() p:SetNetworkOwner(nil) end) end
         end
     end)
 end
-
--- antiKnockback: reset velocity quái sau Lerp
 local function antiKnockback(hrp)
-    pcall(function()
-        hrp.AssemblyLinearVelocity  = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-    end)
+    pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero; hrp.AssemblyAngularVelocity = Vector3.zero end)
 end
 
--- Pool cố định tránh tạo table mới mỗi 0.05s → không GC pressure
-local _targets  = {}
-local _pool     = {}
-local _poolSize = 300
-for i = 1, _poolSize do _pool[i] = {nil, nil} end
+local _targets = {}
+local _pool = {}
+for i = 1, 300 do _pool[i] = {nil,nil} end
 
 local function executeFastAttack()
     local char = Player.Character
@@ -375,9 +248,7 @@ local function executeFastAttack()
     local tool = char:FindFirstChildOfClass("Tool")
     if not tool or (tool.ToolTip ~= "Melee" and tool.ToolTip ~= "Sword") then return end
     if not RegisterAttack or not RegisterHit then return end
-
-    local count     = 0
-    local firstHead = nil
+    local count, firstHead = 0, nil
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
         if folder then
             for _, mob in ipairs(folder:GetChildren()) do
@@ -389,10 +260,8 @@ local function executeFastAttack()
                         for _, part in ipairs(mob:GetChildren()) do
                             if part:IsA("BasePart") then
                                 count = count + 1
-                                local entry = _pool[count] or {nil, nil}
-                                _pool[count] = entry
-                                entry[1] = mob
-                                entry[2] = part
+                                local e = _pool[count] or {nil,nil}
+                                _pool[count] = e; e[1] = mob; e[2] = part
                             end
                         end
                     end
@@ -401,15 +270,13 @@ local function executeFastAttack()
         end
     end
     if count == 0 or not firstHead then return end
-
     table.clear(_targets)
     for i = 1, count do _targets[i] = _pool[i] end
-
     pcall(function()
         RegisterAttack:FireServer(0.0000000000001)
         RegisterHit:FireServer(firstHead, _targets)
         if hitRemote and hitRemoteId and CachedSeed ~= 0 then
-            local enc = string.gsub("RE/RegisterHit", ".", function(c)
+            local enc = string.gsub("RE/RegisterHit",".",function(c)
                 return string.char(bit32.bxor(string.byte(c), math.floor(workspace:GetServerTimeNow()/10%10)+1))
             end)
             cloneref(hitRemote):FireServer(enc, bit32.bxor(hitRemoteId+909090, CachedSeed*2), firstHead, _targets)
@@ -417,12 +284,10 @@ local function executeFastAttack()
     end)
 end
 
--- Attack loop: 20 lần/giây khi đang đánh boss (0.05s = bancu standard)
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.05)
         if _G.IsAttackingBoss then
-            -- Equip melee inline (AutoEquipMelee defined sau section này)
             pcall(function()
                 local char = Player.Character
                 local hum  = char and char:FindFirstChildOfClass("Humanoid")
@@ -430,14 +295,10 @@ task.spawn(function()
                 local cur = char:FindFirstChildOfClass("Tool")
                 if not cur or (cur.ToolTip ~= "Melee" and cur.ToolTip ~= "Sword") then
                     for _, t in ipairs(Player.Backpack:GetChildren()) do
-                        if t:IsA("Tool") and t.ToolTip == "Melee" then
-                            hum:EquipTool(t); return
-                        end
+                        if t:IsA("Tool") and t.ToolTip == "Melee" then hum:EquipTool(t); return end
                     end
                     for _, t in ipairs(Player.Backpack:GetChildren()) do
-                        if t:IsA("Tool") and t.ToolTip == "Sword" then
-                            hum:EquipTool(t); return
-                        end
+                        if t:IsA("Tool") and t.ToolTip == "Sword" then hum:EquipTool(t); return end
                     end
                 end
             end)
@@ -446,7 +307,6 @@ task.spawn(function()
     end
 end)
 
--- Anti-stun/ragdoll loop
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.1)
@@ -458,8 +318,7 @@ task.spawn(function()
             local Stun = char:FindFirstChild("Stun"); local Busy = char:FindFirstChild("Busy")
             if Stun and Stun.Value ~= 0 then Stun.Value = 0 end
             if Busy and Busy.Value then Busy.Value = false end
-            if hum:GetState() == Enum.HumanoidStateType.Ragdoll
-            or hum:GetState() == Enum.HumanoidStateType.FallingDown then
+            if hum:GetState() == Enum.HumanoidStateType.Ragdoll or hum:GetState() == Enum.HumanoidStateType.FallingDown then
                 hum:ChangeState(Enum.HumanoidStateType.GettingUp)
             end
             if hum.PlatformStand then hum.PlatformStand = false end
@@ -468,9 +327,6 @@ task.spawn(function()
     end
 end)
 
-
-
--- AttackMelee upvalue hack (giữ nguyên từ cũ)
 task.spawn(function()
     pcall(function()
         repeat task.wait(0.5) until getgc or not getgenv().NemoRunning
@@ -502,179 +358,134 @@ task.spawn(function()
     end)
 end)
 
--- ==========================================
--- [7] HÀM XỬ LÝ NHÂN VẬT & DI CHUYỂN
--- ==========================================
-local function AutoSelectTeam()
-    local function hasRealTeam()
-        if LocalPlayer:FindFirstChild("Main") then return true end
-        local t = LocalPlayer.Team
-        return t ~= nil and t.Name ~= "Neutral" and t.Name ~= ""
-    end
-    if hasRealTeam() then return end
-
-    local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-    local teamName  = JoinTeam  
-
-    local function trySelectTeam()
-        pcall(function()
-            local mainMinimal = PlayerGui:FindFirstChild("Main (minimal)")
-            local chooseTeam  = mainMinimal and mainMinimal:FindFirstChild("ChooseTeam")
-            if chooseTeam and chooseTeam.Visible then RS.Remotes.CommF_:InvokeServer("SetTeam", teamName) end
-        end)
-        pcall(function() RS.Remotes.CommF_:InvokeServer("SelectTeam", teamName) end)
-        pcall(function()
-            local mainMinimal = PlayerGui:FindFirstChild("Main (minimal)")
-            if not mainMinimal then return end
-            local chooseTeam = mainMinimal:FindFirstChild("ChooseTeam", true)
-            if not chooseTeam or not chooseTeam.Visible then return end
-            local button
-            for _, obj in ipairs(chooseTeam:GetDescendants()) do
-                if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
-                    and (string.find(string.lower(obj.Name), string.lower(teamName))
-                      or (obj.Parent and string.find(string.lower(obj.Parent.Name), string.lower(teamName))))
-                then button = obj; break end
-            end
-            if button then
-                if getconnections then
-                    for _, conn in ipairs(getconnections(button.Activated)) do pcall(conn.Function) end
-                else
-                    local vim = game:GetService("VirtualInputManager")
-                    local pos = button.AbsolutePosition + button.AbsoluteSize / 2
-                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
-                    task.wait(0.05)
-                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
-                end
-            end
-        end)
-    end
-
-    local lastAttempt = 0
-    while not hasRealTeam() and getgenv().NemoRunning do
-        if tick() - lastAttempt >= 0.5 then
-            trySelectTeam()
-            lastAttempt = tick()
-        end
-        task.wait()
-    end
-end
-
 local function getCharacter()
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
     char:WaitForChild("HumanoidRootPart")
     return char
 end
-
-local function toggleNoclip(Toggle)
-    local Char = getCharacter()
-    for _, v in ipairs(Char:GetChildren()) do if v:IsA("Part") then v.CanCollide = not Toggle end end
-    local Humanoid = Char:FindFirstChild("Humanoid")
-    if Humanoid then Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, not Toggle) end
+local function toggleNoclip(on)
+    local char = getCharacter()
+    for _, v in ipairs(char:GetChildren()) do if v:IsA("Part") then v.CanCollide = not on end end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Seated, not on) end
 end
 
-local function Teleport(Goal, Speed)
-    local RootPart = getCharacter().HumanoidRootPart
-    if InstantTP then RootPart.CFrame = Goal
-    else
-        Speed = Speed or MaxSpeed
-        toggleNoclip(true)
-        pcall(function()
-            local Magnitude = (RootPart.Position - Goal.Position).Magnitude
-            while Magnitude > 1 and getgenv().NemoRunning do
-                if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
-                local Direction    = (Goal.Position - RootPart.Position).unit
-                local NextPosition = RootPart.Position + Direction * math.min(Speed * task.wait(), Magnitude)
-                if (NextPosition - Goal.Position).Magnitude < 1 then RootPart.CFrame = Goal; break end
-                RootPart.CFrame = CFrame.new(NextPosition)
-                Magnitude = (RootPart.Position - Goal.Position).Magnitude
-            end
-        end)
-        toggleNoclip(false) 
-    end
-end
-
--- Tween TP an toàn cho boss/altar — KHÔNG dùng InstantTP dù config = true
--- Di chuyển từng bước nhỏ ~120 studs/s, server không detect giật cục
--- TweenPlayer: TweenService trực tiếp lên HRP (bancu pattern)
--- Server thấy velocity liên tục smooth → không bị detect/kick
--- BodyVelocity "BodyClip" chống gravity kéo xuống khi tween ngang
-local TweenService  = game:GetService("TweenService")
-local TWEEN_SPEED   = 300  -- studs/s
-local _activeTween  = nil
-
-local function _ensureBodyVelocity(hrp)
+local TWEEN_SPEED = 300
+local _activeTween = nil
+local function _ensureBV(hrp)
     if not hrp:FindFirstChild("BodyClip") then
-        local bv    = Instance.new("BodyVelocity")
-        bv.Name     = "BodyClip"
-        bv.Parent   = hrp
-        bv.MaxForce = Vector3.new(100000, 100000, 100000)
-        bv.Velocity = Vector3.new(0, 0, 0)
+        local bv = Instance.new("BodyVelocity")
+        bv.Name = "BodyClip"; bv.Parent = hrp
+        bv.MaxForce = Vector3.new(100000,100000,100000); bv.Velocity = Vector3.zero
     end
 end
-
-local function _removeBodyVelocity(hrp)
+local function _removeBV(hrp)
     local bp = hrp and hrp:FindFirstChild("BodyClip")
     if bp then bp:Destroy() end
 end
-
 local function TweenPlayer(goalCF)
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     local dist = (hrp.Position - goalCF.Position).Magnitude
     if dist < 1 then return end
-    if _activeTween and _activeTween.PlaybackState == Enum.PlaybackState.Playing then
-        _activeTween:Cancel()
-    end
+    if _activeTween and _activeTween.PlaybackState == Enum.PlaybackState.Playing then _activeTween:Cancel() end
     toggleNoclip(true)
-    _ensureBodyVelocity(hrp)
-    local info   = TweenInfo.new(dist / TWEEN_SPEED, Enum.EasingStyle.Linear)
-    _activeTween = TweenService:Create(hrp, info, {CFrame = goalCF})
+    _ensureBV(hrp)
+    _activeTween = TweenService:Create(hrp, TweenInfo.new(dist/TWEEN_SPEED, Enum.EasingStyle.Linear), {CFrame=goalCF})
     _activeTween:Play()
     _activeTween.Completed:Wait()
     toggleNoclip(false)
-    -- Destroy BodyVelocity ngay sau khi tween xong — không để lơ lửng
-    _removeBodyVelocity(hrp)
+    _removeBV(hrp)
+end
+local function SafeTweenTP(goalCF) TweenPlayer(goalCF) end
+
+local function Teleport(Goal, Speed)
+    local RootPart = getCharacter().HumanoidRootPart
+    if InstantTP then RootPart.CFrame = Goal; return end
+    Speed = Speed or MaxSpeed
+    toggleNoclip(true)
+    pcall(function()
+        local Mag = (RootPart.Position - Goal.Position).Magnitude
+        while Mag > 1 and getgenv().NemoRunning do
+            if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
+            local Dir = (Goal.Position - RootPart.Position).unit
+            local Next = RootPart.Position + Dir * math.min(Speed * task.wait(), Mag)
+            if (Next - Goal.Position).Magnitude < 1 then RootPart.CFrame = Goal; break end
+            RootPart.CFrame = CFrame.new(Next)
+            Mag = (RootPart.Position - Goal.Position).Magnitude
+        end
+    end)
+    toggleNoclip(false)
 end
 
--- SafeTweenTP alias → TweenPlayer (không đổi các chỗ gọi cũ)
-local function SafeTweenTP(goalCF, _speed)
-    TweenPlayer(goalCF)
-end
-
--- ==========================================
--- [8] HELPER VẬT PHẨM & KẺ THÙ
--- ==========================================
 local replicated = ReplicatedStorage
 
 local function GetBP(name)
     return LocalPlayer.Backpack:FindFirstChild(name) or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild(name))
 end
 
--- Stop script ngay khi có item quan trọng
 local STOP_ITEMS = {
-    "Fist of Darkness",   -- key râu đen
-    "God's Chalice",      -- god chalice
+    ["Fist of Darkness"] = { pos = CFrame.new(-429.54, 71.76, 1836.18), seaKey = "sea2" },
+    ["God's Chalice"]    = { pos = CFrame.new(-290.73, 6.72, 5343.55),  seaKey = "sea3" },
 }
-local function CheckStopItems()
-    for _, itemName in ipairs(STOP_ITEMS) do
-        if GetBP(itemName) then
-            return itemName
-        end
+local SEA_GATES = {
+    sea2 = {
+        Vector3.new(923.21,    126.97, 32852.83),
+        Vector3.new(-6508.55,   89.03,   -132.83),
+        Vector3.new(-281.93,   306.13,    609.28),
+        Vector3.new(2284.91,    15.15,    905.48),
+    },
+    sea3 = {
+        Vector3.new(-5036.00,  315.00,  -3179.00),
+        Vector3.new(5657.88,  1013.07,   -335.49),
+        Vector3.new(-12462.00, 375.00,  -7552.00),
+        Vector3.new(-2097.34, 4776.24, -15013.49),
+        Vector3.new(28286.00,14897.00,    103.00),
+    },
+}
+local function NavigateToSafeZone(itemName)
+    local data = STOP_ITEMS[itemName]
+    if not data then return end
+    StatusLabel.Text = "Ban tim duoc: " .. itemName .. " - Di chuyen vung an toan..."
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+    warn("[NemoHub] Ban tim duoc: " .. itemName)
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then TweenPlayer(data.pos); return end
+    if (hrp.Position - data.pos.Position).Magnitude <= 200 then
+        StatusLabel.Text = "Ban tim duoc: " .. itemName
+        StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        return
     end
-    return nil
+    local gates = SEA_GATES[data.seaKey] or {}
+    local nearGate, nearDist = nil, math.huge
+    for _, gv3 in ipairs(gates) do
+        local d = (hrp.Position - gv3).Magnitude
+        if d < nearDist then nearDist = d; nearGate = gv3 end
+    end
+    local gateOk = false
+    if nearGate and nearDist < 2000 then
+        local before = hrp.Position
+        pcall(function() RS.Remotes.CommF_:InvokeServer("requestEntrance", nearGate) end)
+        task.wait(2)
+        char = LocalPlayer.Character; hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp and (hrp.Position - before).Magnitude > 50 then gateOk = true end
+    end
+    if not gateOk then TweenPlayer(data.pos) end
+    StatusLabel.Text = "Ban tim duoc: " .. itemName
+    StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
 end
 
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.5)
-        local found = CheckStopItems()
-        if found then
-            getgenv().NemoRunning = false
-            warn("[NemoHub] Bạn tìm được: " .. found)
-            StatusLabel.Text = "Bạn tìm được: " .. found
-            StatusLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
-            break
+        for itemName in pairs(STOP_ITEMS) do
+            if GetBP(itemName) then
+                getgenv().NemoRunning = false
+                NavigateToSafeZone(itemName)
+                return
+            end
         end
     end
 end)
@@ -682,8 +493,8 @@ end)
 local _invCache = { data = nil, time = 0 }
 local function GetM(name)
     if not _invCache.data or (tick() - _invCache.time > 3) then
-        local ok, result = pcall(function() return replicated.Remotes.CommF_:InvokeServer("getInventory") end)
-        _invCache.data = (ok and result) or _invCache.data or {}
+        local ok, r = pcall(function() return replicated.Remotes.CommF_:InvokeServer("getInventory") end)
+        _invCache.data = (ok and r) or _invCache.data or {}
         _invCache.time = tick()
     end
     for _, tab in pairs(_invCache.data) do
@@ -691,7 +502,6 @@ local function GetM(name)
     end
     return 0
 end
-
 local function EquipWeapon(name)
     if not name then return end
     local tool = LocalPlayer.Backpack:FindFirstChild(name)
@@ -699,261 +509,267 @@ local function EquipWeapon(name)
         LocalPlayer.Character.Humanoid:EquipTool(tool)
     end
 end
-
--- Tự động equip Melee nếu tay đang trống hoặc không cầm Melee/Sword
-local function AutoEquipMelee()
-    local char = LocalPlayer.Character
-    local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    -- Kiểm tra đang cầm gì
-    local current = char:FindFirstChildOfClass("Tool")
-    if current and (current.ToolTip == "Melee" or current.ToolTip == "Sword") then return end
-    -- Tìm Melee trong Backpack
-    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
-        if tool:IsA("Tool") and tool.ToolTip == "Melee" then
-            hum:EquipTool(tool)
-            return
-        end
-    end
-    -- Fallback: Sword nếu không có Melee
-    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
-        if tool:IsA("Tool") and tool.ToolTip == "Sword" then
-            hum:EquipTool(tool)
-            return
-        end
-    end
-end
-
 local function GetConnectionEnemies(a)
     for _, folder in ipairs({workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("Characters")}) do
         if folder then
             for _, v in pairs(folder:GetChildren()) do
-                if v:IsA("Model") and ((typeof(a) == "table" and table.find(a, v.Name)) or v.Name == a) and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then return v end
+                if v:IsA("Model") and ((typeof(a) == "table" and table.find(a,v.Name)) or v.Name == a)
+                and v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then return v end
             end
         end
     end
 end
-
 local function StoreFruit()
-    local function CheckAndStore(parent)
+    local function Check(parent)
         for _, item in ipairs(parent:GetChildren()) do
-            if item:FindFirstChild("EatRemote", true) or string.find(string.lower(item.Name), "fruit") then
-                local fruitName = item:GetAttribute("OriginalName") or string.gsub(item.Name, " Fruit", "")
-                pcall(function() replicated.Remotes.CommF_:InvokeServer("StoreFruit", fruitName, item) end)
+            if item:FindFirstChild("EatRemote",true) or string.find(string.lower(item.Name),"fruit") then
+                local fn = item:GetAttribute("OriginalName") or string.gsub(item.Name," Fruit","")
+                pcall(function() replicated.Remotes.CommF_:InvokeServer("StoreFruit", fn, item) end)
             end
         end
     end
-    if LocalPlayer:FindFirstChild("Backpack") then CheckAndStore(LocalPlayer.Backpack) end
-    if LocalPlayer.Character then CheckAndStore(LocalPlayer.Character) end
+    if LocalPlayer:FindFirstChild("Backpack") then Check(LocalPlayer.Backpack) end
+    if LocalPlayer.Character then Check(LocalPlayer.Character) end
 end
 
-
-
-
--- ==========================================
--- [11] LOGIC RƯƠNG & SERVER HOP
--- ==========================================
-local function DistanceFromPlrSort(ObjectList)
-    local RootPart = getCharacter():WaitForChild("HumanoidRootPart")
-    table.sort(ObjectList, function(A, B) return (RootPart.Position - A.Position).Magnitude < (RootPart.Position - B.Position).Magnitude end)
+local function AutoSelectTeam()
+    local function hasTeam()
+        if LocalPlayer:FindFirstChild("Main") then return true end
+        local t = LocalPlayer.Team
+        return t ~= nil and t.Name ~= "Neutral" and t.Name ~= ""
+    end
+    if hasTeam() then return end
+    local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+    local function trySelect()
+        pcall(function()
+            local mm = PlayerGui:FindFirstChild("Main (minimal)")
+            local ct = mm and mm:FindFirstChild("ChooseTeam")
+            if ct and ct.Visible then RS.Remotes.CommF_:InvokeServer("SetTeam", JoinTeam) end
+        end)
+        pcall(function() RS.Remotes.CommF_:InvokeServer("SelectTeam", JoinTeam) end)
+        pcall(function()
+            local mm = PlayerGui:FindFirstChild("Main (minimal)")
+            if not mm then return end
+            local ct = mm:FindFirstChild("ChooseTeam", true)
+            if not ct or not ct.Visible then return end
+            local btn
+            for _, obj in ipairs(ct:GetDescendants()) do
+                if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
+                and (string.find(string.lower(obj.Name),string.lower(JoinTeam))
+                  or (obj.Parent and string.find(string.lower(obj.Parent.Name),string.lower(JoinTeam))))
+                then btn = obj; break end
+            end
+            if btn then
+                if getconnections then
+                    for _, conn in ipairs(getconnections(btn.Activated)) do pcall(conn.Function) end
+                else
+                    local vim = game:GetService("VirtualInputManager")
+                    local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
+                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+                    task.wait(0.05)
+                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
+                end
+            end
+        end)
+    end
+    local last = 0
+    while not hasTeam() and getgenv().NemoRunning do
+        if tick() - last >= 0.5 then trySelect(); last = tick() end
+        task.wait()
+    end
 end
 
 local function getChestsSorted()
-    if FirstRun then FirstRun = false; for _, Object in ipairs(workspace:GetDescendants()) do if Object:IsA("Part") and Object.Name:find("Chest") then table.insert(UncheckedChests, Object) end end; _chestsDirty = true end
+    if FirstRun then
+        FirstRun = false
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Part") and obj.Name:find("Chest") then table.insert(UncheckedChests, obj) end
+        end
+        _chestsDirty = true
+    end
     if _chestsDirty then
-        _chestsDirty = false; local cleaned = {}
-        for _, Chest in ipairs(UncheckedChests) do if Chest and Chest.Parent then table.insert(cleaned, Chest) end end
+        _chestsDirty = false
+        local cleaned = {}
+        for _, c in ipairs(UncheckedChests) do if c and c.Parent then table.insert(cleaned, c) end end
         UncheckedChests = cleaned
     end
-    local now = tick(); local char = LocalPlayer.Character; local RootPart = char and char:FindFirstChild("HumanoidRootPart"); local Chests = {}
-    for _, Chest in ipairs(UncheckedChests) do
-        if Chest:IsA("BasePart") and Chest:FindFirstChild("TouchInterest") then
-            local lastTouched = IgnoredChests[Chest]
-            if not lastTouched or (now - lastTouched > CHEST_IGNORE_TIME) then table.insert(Chests, Chest) end
+    local now = tick()
+    local char = LocalPlayer.Character
+    local RP   = char and char:FindFirstChild("HumanoidRootPart")
+    local out  = {}
+    for _, c in ipairs(UncheckedChests) do
+        if c:IsA("BasePart") and c:FindFirstChild("TouchInterest") then
+            local lt = IgnoredChests[c]
+            if not lt or (now - lt > CHEST_IGNORE_TIME) then table.insert(out, c) end
         end
     end
-    if RootPart then
-        local rx, ry, rz = RootPart.Position.X, RootPart.Position.Y, RootPart.Position.Z
-        table.sort(Chests, function(A, B)
-            local ax, ay, az = A.Position.X - rx, A.Position.Y - ry, A.Position.Z - rz
-            local bx, by, bz = B.Position.X - rx, B.Position.Y - ry, B.Position.Z - rz
-            return ax*ax + ay*ay + az*az < bx*bx + by*by + bz*bz
+    if RP then
+        local rx,ry,rz = RP.Position.X, RP.Position.Y, RP.Position.Z
+        table.sort(out, function(A,B)
+            local ax,ay,az = A.Position.X-rx, A.Position.Y-ry, A.Position.Z-rz
+            local bx,by,bz = B.Position.X-rx, B.Position.Y-ry, B.Position.Z-rz
+            return ax*ax+ay*ay+az*az < bx*bx+by*by+bz*bz
         end)
     end
-    return Chests
+    return out
 end
 
 local function HopServer()
-    StatusLabel.Text = "Status: Đang hop server..."
+    StatusLabel.Text = "Status: Dang hop server..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+    VisitedServers[game.JobId] = true
 
-    -- Ghi server hiện tại vào blacklist ngay lập tức
-    VisitedServers[game.JobId] = os.time()
-    pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
-
-    -- Fetch 1 trang duy nhất — đủ 100 server, nhanh nhất
-    local ok, res = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(
-            "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
-        ))
-    end)
-    if not ok or not res or not res.data then
-        StatusLabel.Text = "Status: Fetch thất bại, thử lại..."
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-        task.wait(5)
-        return
+    local function fetchServers(cursor)
+        local url = "https://games.roblox.com/v1/games/"..PlaceId.."/servers/Public?sortOrder=Asc&limit=100"
+        if cursor and cursor ~= "" then url = url .. "&cursor=" .. cursor end
+        local ok, res = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
+        if ok and res and res.data then return res.data, res.nextPageCursor end
+        return nil, nil
     end
 
-    local best = nil
-    for _, s in ipairs(res.data) do
-        local playing = s.playing or 0
-        local maxP    = s.maxPlayers or 0
-        if s.id ~= game.JobId
-        and playing > 0
-        and (maxP - playing) >= 2
-        and not isServerCoolingDown(s.id) then
-            if not best or playing > (best.playing or 0) then
-                best = s
+    local function findBest(servers)
+        for _, s in ipairs(servers) do
+            local playing = s.playing or 0
+            local maxP    = s.maxPlayers or 0
+            if s.id ~= game.JobId and not VisitedServers[s.id]
+            and playing > 0 and (maxP - playing) >= 1 then
+                return s
             end
         end
+        return nil
+    end
+
+    local allServers = {}
+    local cursor = ""
+    for _ = 1, 3 do
+        local page, next = fetchServers(cursor)
+        if not page then break end
+        for _, s in ipairs(page) do table.insert(allServers, s) end
+        if not next or next == "" then break end
+        cursor = next
+    end
+
+    local best = findBest(allServers)
+
+    if not best then
+        VisitedServers = { [game.JobId] = true }
+        best = findBest(allServers)
     end
 
     if best then
-        StatusLabel.Text = string.format("Status: Hop → %d/%d người", best.playing, best.maxPlayers)
+        StatusLabel.Text = string.format("Status: Hop → %d/%d nguoi", best.playing, best.maxPlayers)
         StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
         TeleportService:TeleportToPlaceInstance(PlaceId, best.id, LocalPlayer)
     else
-        -- Cache hết hạn → xóa và hop ngay
-        VisitedServers = { [game.JobId] = os.time() }
-        pcall(function() if writefile then writefile(ServerFile, HttpService:JSONEncode(VisitedServers)) end end)
-        -- Pick server đầu tiên không phải server hiện tại
-        for _, s in ipairs(res.data) do
-            if s.id ~= game.JobId and (s.playing or 0) > 0 and ((s.maxPlayers or 0) - (s.playing or 0)) >= 2 then
-                TeleportService:TeleportToPlaceInstance(PlaceId, s.id, LocalPlayer)
-                return
-            end
-        end
-        StatusLabel.Text = "Status: Không tìm được server, thử lại..."
+        StatusLabel.Text = "Status: Khong tim duoc server, thu lai..."
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-        task.wait(10)
+        task.wait(5)
     end
 end
 
--- ==========================================
--- [12] VÒNG LẶP CHÍNH (MAIN)
--- ==========================================
-local function jumpIntoChest(RootPart, Chest, maxAttempts)
-    maxAttempts = maxAttempts or 4
-    for attempt = 1, maxAttempts do
+local function jumpIntoChest(RP, Chest, maxA)
+    maxA = maxA or 4
+    for i = 1, maxA do
         if not Chest or not Chest.Parent or not getgenv().NemoRunning then return end
         local char = LocalPlayer.Character
         local hum  = char and char:FindFirstChildOfClass("Humanoid")
         local root = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or hum.Health <= 0 or not root then return end
-        local angle = (attempt - 1) * (math.pi * 2 / maxAttempts) + math.random() * 0.3
-        local approachDist = hrand(1.5, 2.5)
-        root.CFrame = Chest.CFrame * CFrame.new(math.cos(angle) * approachDist, 1.5, math.sin(angle) * approachDist)
+        local angle = (i-1) * (math.pi*2/maxA) + math.random()*0.3
+        local ad = hrand(1.5, 2.5)
+        root.CFrame = Chest.CFrame * CFrame.new(math.cos(angle)*ad, 1.5, math.sin(angle)*ad)
         RunService.Heartbeat:Wait()
         hum.Jump = true
-        pcall(function() root.AssemblyLinearVelocity = (Chest.Position - root.Position).Unit * 28 end); task.wait(0.06)
+        pcall(function() root.AssemblyLinearVelocity = (Chest.Position - root.Position).Unit * 28 end)
+        task.wait(0.06)
         root.CFrame = Chest.CFrame * CFrame.new(0, 0.3, 0)
-        pcall(function() if firetouchinterest then firetouchinterest(root, Chest, 0); task.wait(hrand(0.06, 0.10)); firetouchinterest(root, Chest, 1) end end)
+        pcall(function()
+            if firetouchinterest then
+                firetouchinterest(root, Chest, 0); task.wait(hrand(0.06,0.10)); firetouchinterest(root, Chest, 1)
+            end
+        end)
         if not Chest or not Chest.Parent then return end
     end
 end
 
-local function TouchChest(RootPart, Chest)
+local function TouchChest(RP, Chest)
     if InstantTP then
-        RootPart.CFrame = jitterCF(Chest.CFrame * CFrame.new(0, 0.5, 0))
+        RP.CFrame = jitterCF(Chest.CFrame * CFrame.new(0, 0.5, 0))
         local fired = false
         pcall(function()
             if firetouchinterest then
-                firetouchinterest(RootPart, Chest, 0)
-                task.wait(hrand(0.1, 0.15)) -- ANTI-GHOST TOUCH
-                firetouchinterest(RootPart, Chest, 1)
+                firetouchinterest(RP, Chest, 0); task.wait(hrand(0.1,0.15)); firetouchinterest(RP, Chest, 1)
                 fired = true
             end
         end)
-        if not fired then jumpIntoChest(RootPart, Chest) end
+        if not fired then jumpIntoChest(RP, Chest) end
     else
         Teleport(Chest.CFrame)
         pcall(function()
             if firetouchinterest then
-                firetouchinterest(RootPart, Chest, 0)
-                task.wait(0.05)
-                firetouchinterest(RootPart, Chest, 1)
+                firetouchinterest(RP, Chest, 0); task.wait(0.05); firetouchinterest(RP, Chest, 1)
             end
         end)
         RunService.Heartbeat:Wait()
     end
 end
 
-local function GrabFruit(RootPart, fruit)
+local function GrabFruit(RP, fruit)
     local handle = fruit:FindFirstChild("Handle")
     if not handle then return end
-    local targetCF = jitterCF(handle.CFrame, 0.3)
-    SafeTweenTP(targetCF)
-    local freshChar = LocalPlayer.Character
-    local freshRoot = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-    if not freshRoot then return end
-    pcall(function() if firetouchinterest then firetouchinterest(freshRoot, handle, 0); task.wait(hrand(0.08, 0.15)); firetouchinterest(freshRoot, handle, 1) end end)
+    SafeTweenTP(jitterCF(handle.CFrame, 0.3))
+    local fc = LocalPlayer.Character
+    local fr = fc and fc:FindFirstChild("HumanoidRootPart")
+    if not fr then return end
+    pcall(function()
+        if firetouchinterest then
+            firetouchinterest(fr, handle, 0); task.wait(hrand(0.08,0.15)); firetouchinterest(fr, handle, 1)
+        end
+    end)
     task.wait(hrand(0.4, 0.7))
     StoreFruit()
 end
 
-local function ShouldBreakChest()
-    if CollectFruit and #GetDroppedFruits() > 0 then return true end
-    return false
-end
-
 local function main()
     AutoSelectTeam()
-
     while getgenv().NemoRunning do
-        local char = LocalPlayer.Character
+        local char    = LocalPlayer.Character
         local RootPart = char and char:FindFirstChild("HumanoidRootPart")
         if not RootPart then task.wait(1); continue end
 
-        -- [ƯU TIÊN 1] Lụm Trái
         if CollectFruit then
             local fruits = GetDroppedFruits()
             if #fruits > 0 then
                 _G.IsAttackingBoss = false
-                StatusLabel.Text = "Status: Phát hiện Trái! Đang lụm..."
+                StatusLabel.Text = "Status: Phat hien Trai! Dang lum..."
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
                 GrabFruit(RootPart, fruits[1]); task.wait(0.3); continue
             end
         end
 
-
-        -- [ƯU TIÊN 4] Auto Chest (Có Lô 15 rương & Fix Smooth TP)
-        if ShouldBreakChest() then task.wait(); continue end
         _G.IsAttackingBoss = false
         StatusLabel.Text = "Status: Auto Chest (" .. (InstantTP and "Instant" or "Smooth TP") .. ")"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 
         local Chests = getChestsSorted()
         if #Chests == 0 then
-            StatusLabel.Text = "Status: Không có rương, chờ 3s rồi hop..."
+            StatusLabel.Text = "Status: Khong co ruong, cho 3s roi hop..."
             StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-            local antiKickEnd = tick() + 3
-            while tick() < antiKickEnd and getgenv().NemoRunning do
-                if ShouldBreakChest() then break end
-                pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(200, 600), math.random(200, 500))) end)
+            local t = tick() + 3
+            while tick() < t and getgenv().NemoRunning do
+                if CollectFruit and #GetDroppedFruits() > 0 then break end
+                pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(math.random(200,600), math.random(200,500))) end)
                 task.wait(0.8)
             end
-            if ShouldBreakChest() or not getgenv().NemoRunning then task.wait(); continue end
+            if not getgenv().NemoRunning then continue end
             HopServer(); task.wait(3); continue
         end
 
-        -- Lô rương (Batching): Lướt nhanh rồi nghỉ 1 nhịp check Radar
-        local batchSize = InstantTP and 15 or 5 
+        local batchSize = InstantTP and 15 or 5
         local count = 0
-
         for _, Chest in ipairs(Chests) do
             if not getgenv().NemoRunning then break end
-            if count >= batchSize then break end 
-
+            if count >= batchSize then break end
             char = LocalPlayer.Character; RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
             if Chest and Chest.Parent and Chest:FindFirstChild("TouchInterest") then
@@ -961,12 +777,11 @@ local function main()
                 IgnoredChests[Chest] = tick()
                 count = count + 1
                 task.wait(0.15)
-                if ShouldBreakChest() then break end
+                if CollectFruit and #GetDroppedFruits() > 0 then break end
             end
         end
         task.wait()
     end
 end
 
--- Khởi động Main Loop
 main()
