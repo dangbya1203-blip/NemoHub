@@ -21,6 +21,7 @@ local InstantTP         = _cfg.InstantTP    ~= nil and _cfg.InstantTP    or true
 local MaxSpeed          = _cfg.MaxSpeed     or 350
 local JoinTeam          = _cfg.JoinTeam     or "Pirates"
 local CollectFruit      = _cfg.CollectFruit ~= nil and _cfg.CollectFruit or true
+local StopOnItem        = _cfg.StopOnItem   ~= nil and _cfg.StopOnItem   or true
 local TP_JITTER         = _cfg.TPJitter     or 0.55
 local CHEST_IGNORE_TIME = _cfg.ChestIgnoreTime or 1.5
 
@@ -480,6 +481,7 @@ end
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.5)
+        if not StopOnItem then continue end
         for itemName in pairs(STOP_ITEMS) do
             if GetBP(itemName) then
                 getgenv().NemoRunning = false
