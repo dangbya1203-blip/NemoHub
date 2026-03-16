@@ -54,6 +54,9 @@ _G.IsAttackingBoss = false
 -- offset bay trên đầu boss
 local Pos = CFrame.new(0, 35, 0)
 
+-- tọa độ spawn Darkbeard
+local DARKBEARD_SPAWN_POS = CFrame.new(3776.81, 15.02, -3498.78)
+
 local StatFile = "NemoHub_Stats_" .. tostring(PlaceId) .. ".json"
 local UIStats  = { StartTime = os.time() }
 pcall(function()
@@ -401,7 +404,7 @@ local function toggleNoclip(on)
     end)
 end
 
-local TWEEN_SPEED = 300
+local TWEEN_SPEED  = 300
 local _activeTween = nil
 
 local function _ensureBV(hrp)
@@ -565,7 +568,6 @@ local function HopServer()
     end
 
     local best = findBest(allServers)
-
     if not best then
         _hopFailCount = _hopFailCount + 1
         if _hopFailCount >= 2 then
@@ -591,7 +593,6 @@ local function HopServer()
 end
 
 -- === BOSS FOLLOW LOOP ===
--- Bám trên đầu boss khi IsAttackingBoss = true
 task.spawn(function()
     while getgenv().NemoRunning do
         task.wait(0.1)
@@ -610,7 +611,6 @@ task.spawn(function()
 end)
 
 -- === FIGHT BOSS ===
--- Bật IsAttackingBoss, chờ boss chết, tắt flag
 local function fightBoss(boss)
     if not boss or not boss.Parent then return end
     _G.IsAttackingBoss = true
@@ -620,9 +620,55 @@ local function fightBoss(boss)
     local startTime = tick()
     repeat
         RunService.Heartbeat:Wait()
-        -- timeout 5 phút phòng trường hợp kẹt
         if tick() - startTime > 300 then break end
         if not getgenv().NemoRunning then break end
+
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+        -- Player chết: chờ respawn rồi tween lại
+        if not hum or hum.Health <= 0 or not hrp then
+            _G.IsAttackingBoss = false
+            StatusLabel.Text = "Darkbeard: Dead, waiting respawn..."
+            StatusLabel.TextColor3 = Color3.fromRGB(200, 100, 100)
+
+            -- Chờ respawn tối đa 10s
+            local rt = tick()
+            repeat
+                task.wait(0.5)
+                char = LocalPlayer.Character
+                hum  = char and char:FindFirstChildOfClass("Humanoid")
+                hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            until (hum and hum.Health > 0 and hrp) or (tick() - rt > 10)
+
+            if not hum or hum.Health <= 0 or not hrp then continue end
+
+            -- Kiểm tra boss còn không
+            local bossNow = workspace:FindFirstChild("Enemies") and workspace.Enemies:FindFirstChild("Darkbeard")
+            if not bossNow then break end
+
+            -- Tween đến spawn point trước để chắc chắn trong vùng render boss
+            StatusLabel.Text = "Darkbeard: Returning to spawn point..."
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+            TweenPlayer(DARKBEARD_SPAWN_POS, true)
+            task.wait(0.5)
+
+            -- Re-check boss sau khi về spawn point
+            bossNow = workspace:FindFirstChild("Enemies") and workspace.Enemies:FindFirstChild("Darkbeard")
+            if not bossNow then break end
+
+            -- Tween lên đầu boss
+            local bossHRP = bossNow:FindFirstChild("HumanoidRootPart")
+            if bossHRP then
+                TweenPlayer(bossHRP.CFrame * Pos, true)
+            end
+
+            _G.IsAttackingBoss = true
+            StatusLabel.Text = "Darkbeard: Fighting..."
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        end
+
     until not (workspace:FindFirstChild("Enemies") and workspace.Enemies:FindFirstChild("Darkbeard"))
 
     _G.IsAttackingBoss = false
@@ -631,23 +677,40 @@ local function fightBoss(boss)
 end
 
 -- === AUTO DARKBEARD FLOW ===
--- Tween → equip → spawn → fight → hop
 local _darkbeardRunning = false
-local DARKBEARD_SPAWN_POS = CFrame.new(3776.81, 15.02, -3498.78)
 
 local function runDarkbeard()
     if _darkbeardRunning then return end
     _darkbeardRunning = true
 
-    -- Bước 1: Tween đến điểm spawn
+    -- Bước 1: Tween đến spawn point
     StatusLabel.Text = "Darkbeard: Heading to spawn point..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
     TweenPlayer(DARKBEARD_SPAWN_POS, true)
     task.wait(0.5)
 
-    -- Bước 2: Equip + dùng item
-    StatusLabel.Text = "Darkbeard: Using Fist of Darkness..."
+    -- Bước 2: Mô phỏng di chuyển để trigger spawn
+    StatusLabel.Text = "Darkbeard: Simulating movement..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 0)
+    pcall(function()
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local dirs = {
+                Vector3.new(1,0,0), Vector3.new(-1,0,0),
+                Vector3.new(0,0,1), Vector3.new(0,0,-1),
+            }
+            for _, dir in ipairs(dirs) do
+                hum:Move(dir, false)
+                task.wait(0.3)
+            end
+            hum:Move(Vector3.zero, false)
+        end
+    end)
+    task.wait(0.5)
+
+    -- Bước 3: Equip + dùng item
+    StatusLabel.Text = "Darkbeard: Using Fist of Darkness..."
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 0)
     pcall(function()
         local item = GetBP("Fist of Darkness")
         if item then
@@ -660,7 +723,7 @@ local function runDarkbeard()
         end
     end)
 
-    -- Bước 3: Chờ Darkbeard xuất hiện trong workspace.Enemies (tối đa 30s)
+    -- Bước 4: Chờ Darkbeard xuất hiện (tối đa 30s)
     StatusLabel.Text = "Darkbeard: Waiting for boss to spawn..."
     StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
     local t = tick()
@@ -672,10 +735,10 @@ local function runDarkbeard()
     local boss = workspace:FindFirstChild("Enemies") and workspace.Enemies:FindFirstChild("Darkbeard")
 
     if boss then
-        -- Bước 4: Đánh boss
+        -- Bước 5: Đánh boss
         fightBoss(boss)
         task.wait(1)
-        -- Bước 5: Hop server
+        -- Bước 6: Hop server
         HopServer()
     else
         StatusLabel.Text = "Darkbeard: Boss did not spawn (timeout)"
@@ -812,12 +875,10 @@ local function main()
         local RootPart = char and char:FindFirstChild("HumanoidRootPart")
         if not RootPart then task.wait(1); continue end
 
-        -- [1] Kiểm tra Fist of Darkness trước tiên
-        if GetBP("Fist of Darkness") then
-            if AutoDarkbeard then
-                runDarkbeard()
-                continue
-            end
+        -- [1] Fist of Darkness → Darkbeard flow
+        if AutoDarkbeard and GetBP("Fist of Darkness") then
+            runDarkbeard()
+            continue
         end
 
         -- [2] Fruit priority
@@ -851,8 +912,8 @@ local function main()
 
         for _, Chest in ipairs(Chests) do
             if not getgenv().NemoRunning then break end
-            -- check key giữa chừng
-            if GetBP("Fist of Darkness") then break end
+            -- check key giữa chừng farm chest
+            if AutoDarkbeard and GetBP("Fist of Darkness") then break end
             char     = LocalPlayer.Character
             RootPart = char and char:FindFirstChild("HumanoidRootPart")
             if not RootPart then break end
